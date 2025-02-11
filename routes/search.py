@@ -107,9 +107,20 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
     # load vector store
     vector_store_id = googleid_to_vectorstoreid(payload.googleSheetId)
     if vector_store_id not in vector_dbs:
-        raise HTTPException(
-            status_code=400, detail=f"Vector store {vector_store_id} not found."
-        )
+        # try to reload
+        try:
+            vector_dbs[vector_store_id] = VectorStore(
+                store_path=os.environ["VECTOR_STORE_ADDRESS"],
+                store_service="azuresearch",
+                store_password=os.environ["VECTOR_STORE_PASSWORD"],
+                embedding_source="OpenAI",
+                embedding_model=os.environ["MODEL_EMBEDDINGS"],
+                store_id=vector_store_id,
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=400, detail=f"Vector store {vector_store_id} not found."
+            )
 
     # retrieve documents
     t2_start = perf_counter()
