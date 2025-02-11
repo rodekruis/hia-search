@@ -1,10 +1,10 @@
-# hia-qabot
+# hia-search
 
-Question answering bot for [HIA](https://github.com/rodekruis/helpful-information).
+Search engine for [HIA](https://github.com/rodekruis/helpful-information).
 
 ## Description
 
-Synopsis: a [dockerized](https://www.docker.com/) [python](https://www.python.org/) API to serve a chatbot for [HIA](https://github.com/rodekruis/helpful-information).
+Synopsis: a [dockerized](https://www.docker.com/) [python](https://www.python.org/) API to search [HIA](https://github.com/rodekruis/helpful-information).
 
 Based on [langchain](https://github.com/langchain-ai/langchain), powered by OpenAI models.
 
