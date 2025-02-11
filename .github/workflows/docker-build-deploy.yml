@@ -50,7 +50,7 @@ jobs:
     steps:
     - name: Deploy container image to Azure Web App
       if: contains(env.BRANCH_NAME, 'main')
-      id: deploy-to-webapp
+      id: deploy-to-prod
       uses: azure/webapps-deploy@v2
       with:
         app-name: 'hia-search'
@@ -60,7 +60,7 @@ jobs:
 
     - name: Deploy container image to Azure Web App
       if: contains(env.BRANCH_NAME, 'dev')
-      id: deploy-to-webapp
+      id: deploy-to-dev
       uses: azure/webapps-deploy@v2
       with:
           app-name: 'hia-search'
