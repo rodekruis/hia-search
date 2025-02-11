@@ -13,10 +13,12 @@ from utils.vector_store import VectorStore, googleid_to_vectorstoreid
 from utils.constants import DocumentMetadata
 from utils.document_loader import DocumentLoader
 from utils.logger import logger
-
-dm = DocumentMetadata()
+import orjson
+from typing import Any
 from time import perf_counter
 import os
+
+dm = DocumentMetadata()
 
 router = APIRouter()
 
@@ -28,9 +30,8 @@ azure_search_index_client = SearchIndexClient(
 )
 
 # initialize vector stores
-indexes = azure_search_index_client.list_indexes()
 vector_dbs = {}
-for index in indexes:
+for index in azure_search_index_client.list_indexes():
     vector_dbs[index.name] = VectorStore(
         store_path=os.environ["VECTOR_STORE_ADDRESS"],
         store_service="azuresearch",
@@ -39,6 +40,13 @@ for index in indexes:
         embedding_model=os.environ["MODEL_EMBEDDINGS"],
         store_id=index.name,
     )
+
+
+class ORJSONResponse(JSONResponse):
+    media_type = "application/json"
+
+    def render(self, content: Any) -> bytes:
+        return orjson.dumps(content)
 
 
 class SearchPayload(BaseModel):
@@ -107,9 +115,21 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
     # load vector store
     vector_store_id = googleid_to_vectorstoreid(payload.googleSheetId)
     if vector_store_id not in vector_dbs:
-        raise HTTPException(
-            status_code=400, detail=f"Vector store {vector_store_id} not found."
-        )
+        # try again in case the vector store was just added
+        vector_store_ids = [i.name for i in azure_search_index_client.list_indexes()]
+        if vector_store_id in vector_store_ids:
+            vector_dbs[vector_store_id] = VectorStore(
+                store_path=os.environ["VECTOR_STORE_ADDRESS"],
+                store_service="azuresearch",
+                store_password=os.environ["VECTOR_STORE_PASSWORD"],
+                embedding_source="OpenAI",
+                embedding_model=os.environ["MODEL_EMBEDDINGS"],
+                store_id=vector_store_id,
+            )
+        else:
+            raise HTTPException(
+                status_code=400, detail=f"Vector store {vector_store_id} not found."
+            )
 
     # retrieve documents
     t2_start = perf_counter()
@@ -217,7 +237,7 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
     logger.info(f"{len(results)} results found")
     logger.info(f"results: {results}")
 
-    return JSONResponse(
+    return ORJSONResponse(
         status_code=200,
         content={"results": results},
     )

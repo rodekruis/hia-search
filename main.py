@@ -35,7 +35,7 @@ else:
     port = os.environ["PORT"]
 
 description = """
-Search [HIA](https://github.com/rodekruis/helpful-information).
+Search engine for [HIA](https://github.com/rodekruis/helpful-information).
 
 Built with love by [NLRC 510](https://www.510.global/). See
 [the project on GitHub](https://github.com/rodekruis/hia-search) or [contact us](mailto:support@510.global).

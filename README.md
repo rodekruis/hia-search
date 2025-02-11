@@ -6,9 +6,9 @@ Search engine for [HIA](https://github.com/rodekruis/helpful-information).
 
 Synopsis: a [dockerized](https://www.docker.com/) [python](https://www.python.org/) API to search [HIA](https://github.com/rodekruis/helpful-information).
 
-Based on [langchain](https://github.com/langchain-ai/langchain), powered by OpenAI models.
+Based on [langchain](https://github.com/langchain-ai/langchain), powered by language models. Uses [Poetry](https://python-poetry.org/) for dependency management and [Azure AI Search](https://learn.microsoft.com/en-us/azure/search/search-what-is-azure-search) for indexing and searching.
 
-Uses [Poetry](https://python-poetry.org/) for dependency management.
+Largely inspired by [this](https://github.com/deloitte-nl/knowledge-enriched-chatbot) and [this](https://github.com/rodekruis/hia-search-engine) project, kudos to the authors.
 
 ## API Usage
 
@@ -20,12 +20,13 @@ See [the docs](https://hia-chatbot.azurewebsites.net/docs).
 cp example.env .env
 ```
 
-Edit the provided [ENV-variables](./example.env) accordingly.
+and edit the provided [ENV-variables](./example.env) accordingly.
 
 ### Run locally
 
 ```sh
-poetry install
+pip install poetry
+poetry install --no-root
 uvicorn main:app --reload
 ```
 
