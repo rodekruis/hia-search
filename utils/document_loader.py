@@ -86,7 +86,19 @@ class DocumentLoader:
         if self.document_type.lower() == "googlesheet":
             df = pd.read_csv(self.loader)
             df[dm.GOOGLE_INDEX] = df.index
-            df = df[df["Visible?\n#VISIBLE"] == "Show"]  # only visible entries
+            # rename columns to standard format
+            df = df.rename(
+                columns={
+                    next(c for c in df.columns if "#CATEGORY" in c): dm.CATEGORY,
+                    next(c for c in df.columns if "#SUBCATEGORY" in c): dm.SUBCATEGORY,
+                    next(c for c in df.columns if "#SLUG" in c): dm.SLUG,
+                    next(c for c in df.columns if "#PARENT" in c): dm.PARENT,
+                    next(c for c in df.columns if "#QUESTION" in c): dm.QUESTION,
+                    next(c for c in df.columns if "#ANSWER" in c): dm.ANSWER,
+                    next(c for c in df.columns if "#VISIBLE" in c): "visible",
+                }
+            )
+            df = df[df["visible"] == "Show"]  # only visible entries
         else:
             raise NotImplementedError(
                 f"Loader of document type {self.document_type} not available. Only loading of 'googlesheet' is currently implemented."
@@ -97,12 +109,6 @@ class DocumentLoader:
         df = self._to_dataframe()
 
         # clean text
-        df = df.rename(
-            columns={
-                "The Answer (can be multi-line)\n#ANSWER": dm.ANSWER,
-                "The Question (should be 1 line)\n#QUESTION": dm.QUESTION,
-            }
-        )
         df["text"] = df[dm.QUESTION] + " " + df[dm.ANSWER]
         df["text"] = df["text"].str.replace(r"<[^<]+?>", "", regex=True)
         df["text"] = df["text"].str.replace(r"\n", " ", regex=True)
@@ -122,14 +128,6 @@ class DocumentLoader:
         df["text"] = df["text"].astype(str)
 
         # extra filters
-        df = df.rename(
-            columns={
-                "Category ID\n#CATEGORY": dm.CATEGORY,
-                "Sub-Category ID\n#SUBCATEGORY": dm.SUBCATEGORY,
-                "Unique name/part of URL\n#SLUG": dm.SLUG,
-                "Name/Slug of parent Question\n#PARENT": dm.PARENT,
-            }
-        )
         df = df.dropna(subset=["text", dm.GOOGLE_INDEX, dm.CATEGORY, dm.SUBCATEGORY])
         df[dm.CATEGORY] = df[dm.CATEGORY].astype(int)
         df[dm.SUBCATEGORY] = df[dm.SUBCATEGORY].astype(int)
