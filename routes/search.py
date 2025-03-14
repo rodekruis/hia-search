@@ -16,6 +16,7 @@ from utils.logger import logger
 import orjson
 from typing import Any
 from time import perf_counter
+from utils.translator import translate
 import os
 
 dm = DocumentMetadata()
@@ -52,37 +53,19 @@ class ORJSONResponse(JSONResponse):
 class SearchPayload(BaseModel):
     query: str = Field(
         ...,
-        description="""
-        Text of the question""",
+        description="""Text of the question""",
     )
     googleSheetId: str = Field(
         ...,
-        description="""
-        HIA Google sheet ID""",
+        description="""HIA Google sheet ID""",
     )
     k: int = Field(
         5,
         description="""Number of results to return""",
     )
-
-
-class Reference(BaseModel):
-    category: str
-    subcategory: str
-    slug: str
-    parent: str
-
-
-class AnswerWithReferences(BaseModel):
-    answer: str = Field(
-        ...,
-        description="""
-        Text of the answer""",
-    )
-    references: list[Reference] = Field(
-        ...,
-        description="""
-        list of references to documents in the vector store""",
+    lang: str = Field(
+        "en",
+        description="""Language of the query; results will be translated to this language""",
     )
 
 
@@ -98,7 +81,7 @@ def get_score_google_index(docs_and_scores, google_index: str):
 
 @router.post("/search")
 async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme)):
-    """Ask something to the chatbot and get an answer."""
+    """Search in HIA."""
 
     if api_key != os.environ["API_KEY"]:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -131,6 +114,13 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
                 status_code=400, detail=f"Vector store {vector_store_id} not found."
             )
 
+    # translate if necessary
+    if payload.lang != "en":
+        logger.info(f"Translating query from {payload.lang} to en")
+        payload.query = translate(
+            from_lang=payload.lang, to_lang="en", text=payload.query
+        )
+
     # retrieve documents
     t2_start = perf_counter()
     logger.info(f"Searching for {payload.k} results with query {payload.query}")
@@ -138,10 +128,6 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
         query=payload.query, k=payload.k
     )
 
-    # retriever = vector_db.langchain_client.as_retriever(
-    #     search_type="similarity", k=payload.results
-    # )
-    # docs = retriever.invoke("what did the president say about ketanji brown jackson?")
     t2_stop = perf_counter()
     logger.info(
         f"Elapsed time retrieving documents: {float(t2_stop - t2_start)} seconds"
@@ -176,7 +162,7 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
                 children.append(
                     {
                         "question": row["The Question (should be 1 line)\n#QUESTION"],
-                        "content": row["The Answer (can be multi-line)\n#ANSWER"],
+                        "answer": row["The Answer (can be multi-line)\n#ANSWER"],
                         "score": get_score_google_index(
                             docs_and_scores, row[dm.GOOGLE_INDEX]
                         ),
@@ -203,7 +189,7 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
                             "question": row[
                                 "The Question (should be 1 line)\n#QUESTION"
                             ],
-                            "content": row["The Answer (can be multi-line)\n#ANSWER"],
+                            "answer": row["The Answer (can be multi-line)\n#ANSWER"],
                             "score": get_score_google_index(
                                 docs_and_scores, row[dm.GOOGLE_INDEX]
                             ),
@@ -231,6 +217,25 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
     # remove google_index from results
     for result in results:
         result.pop("google_index")
+
+    # translate results if necessary
+    if payload.lang != "en":
+        logger.info(f"Translating result from en to {payload.lang}")
+        for result in results:
+            result["question"] = translate(
+                from_lang="en", to_lang=payload.lang, text=result["question"]
+            )
+            result["answer"] = translate(
+                from_lang="en", to_lang=payload.lang, text=result["answer"]
+            )
+            if result["children"]:
+                for child in result["children"]:
+                    child["question"] = translate(
+                        from_lang="en", to_lang=payload.lang, text=child["question"]
+                    )
+                    child["answer"] = translate(
+                        from_lang="en", to_lang=payload.lang, text=child["answer"]
+                    )
 
     t2_stop = perf_counter()
     logger.info(f"Elapsed time preparing results: {float(t2_stop - t2_start)} seconds")
