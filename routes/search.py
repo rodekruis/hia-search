@@ -13,7 +13,7 @@ from azure.search.documents.indexes import SearchIndexClient
 from azure.core.credentials import AzureKeyCredential
 from utils.vector_store import VectorStore, googleid_to_vectorstoreid
 from utils.constants import DocumentMetadata
-import ast
+import json
 from utils.logger import logger
 import orjson
 from typing import Any
@@ -123,10 +123,9 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
     )
 
     # build results they way HIA likes them
-
     df = pd.DataFrame.from_records(
         [
-            ast.literal_eval(doc["metadata"])
+            json.loads(doc["metadata"], strict=False)
             for doc in vector_dbs[vector_store_id].get_documents()
         ]
     )  # load all documents from vector store
