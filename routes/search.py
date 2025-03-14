@@ -55,7 +55,7 @@ class ORJSONResponse(JSONResponse):
 class SearchPayload(BaseModel):
     query: str = Field(
         ...,
-        description="""Text of the question""",
+        description="""Text of the search query""",
     )
     googleSheetId: str = Field(
         ...,
@@ -67,7 +67,7 @@ class SearchPayload(BaseModel):
     )
     lang: str = Field(
         "en",
-        description="""Language of the query; results will be translated to this language""",
+        description="""Language of the search query; results will be translated to this language""",
     )
 
 
@@ -155,7 +155,6 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
                     {
                         dm.CATEGORY: row[dm.CATEGORY],
                         dm.SUBCATEGORY: row[dm.SUBCATEGORY],
-                        dm.SLUG: row[dm.SLUG],
                         dm.QUESTION: row[dm.QUESTION],
                         dm.ANSWER: row[dm.ANSWER],
                         dm.SCORE: get_score_google_index(
@@ -180,7 +179,6 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
                         {
                             dm.CATEGORY: row[dm.CATEGORY],
                             dm.SUBCATEGORY: row[dm.SUBCATEGORY],
-                            dm.SLUG: row[dm.SLUG],
                             dm.QUESTION: row[dm.QUESTION],
                             dm.ANSWER: row[dm.ANSWER],
                             dm.SCORE: get_score_google_index(
