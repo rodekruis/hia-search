@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import pandas as pd
 from fastapi import (
     Depends,
     APIRouter,
@@ -11,7 +13,7 @@ from azure.search.documents.indexes import SearchIndexClient
 from azure.core.credentials import AzureKeyCredential
 from utils.vector_store import VectorStore, googleid_to_vectorstoreid
 from utils.constants import DocumentMetadata
-from utils.document_loader import DocumentLoader
+import ast
 from utils.logger import logger
 import orjson
 from typing import Any
@@ -87,15 +89,6 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
     if api_key != os.environ["API_KEY"]:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # load document from Google Sheet
-    t2_start = perf_counter()
-    doc_loader = DocumentLoader(
-        document_type="googlesheet", document_id=payload.googleSheetId
-    )
-    df = doc_loader._to_dataframe()
-    t2_stop = perf_counter()
-    logger.info(f"Elapsed time loading dataframe: {float(t2_stop - t2_start)} seconds")
-
     # load vector store
     vector_store_id = googleid_to_vectorstoreid(payload.googleSheetId)
     if vector_store_id not in vector_dbs:
@@ -115,28 +108,28 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
                 status_code=400, detail=f"Vector store {vector_store_id} not found."
             )
 
+    logger.info(f"Search query: '{payload.query}'")
+
     # translate if necessary
     if payload.lang != "en":
-        logger.info(f"Translating query from {payload.lang} to en")
         payload.query = translate(
             from_lang=payload.lang, to_lang="en", text=payload.query
         )
+        logger.info(f"Search query translated {payload.lang}->en: '{payload.lang}'")
 
     # retrieve documents
-    t2_start = perf_counter()
-    logger.info(f"Searching for {payload.k} results with query {payload.query}")
     docs_and_scores = vector_dbs[vector_store_id].similarity_search_with_score(
         query=payload.query, k=payload.k
     )
 
-    t2_stop = perf_counter()
-    logger.info(
-        f"Elapsed time retrieving documents: {float(t2_stop - t2_start)} seconds"
-    )
-    logger.info(len(docs_and_scores))
-
     # build results they way HIA likes them
-    t2_start = perf_counter()
+
+    df = pd.DataFrame.from_records(
+        [
+            ast.literal_eval(doc["metadata"])
+            for doc in vector_dbs[vector_store_id].get_documents()
+        ]
+    )  # load all documents from vector store
     results = []
     for doc_and_score in docs_and_scores:
         doc = doc_and_score[0]
@@ -210,8 +203,6 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
 
         results.append(result)
 
-    logger.info(f"results: {results}")
-
     # keep only unique results
     results = list({v[dm.GOOGLE_INDEX]: v for v in results}.values())
     # remove google_index from results
@@ -236,11 +227,6 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
                     child[dm.ANSWER] = translate(
                         from_lang="en", to_lang=payload.lang, text=child[dm.ANSWER]
                     )
-
-    t2_stop = perf_counter()
-    logger.info(f"Elapsed time preparing results: {float(t2_stop - t2_start)} seconds")
-    logger.info(f"{len(results)} results found")
-    logger.info(f"results: {results}")
 
     return ORJSONResponse(
         status_code=200,

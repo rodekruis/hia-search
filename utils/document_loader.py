@@ -27,9 +27,6 @@ class DocumentLoader:
 
     Input
     --------
-    document_path:
-        str
-        Location of the raw document(s)
     document_id:
         str
         Unique identifier of the document
@@ -56,53 +53,50 @@ class DocumentLoader:
     def __init__(
         self,
         document_type: str,
-        document_path: str = None,
         document_id: str = None,
+        document_data: dict = None,
         **kwargs: dict,
     ):
-        self.document_path = document_path
-        self.document_id = document_id
         self.document_type = document_type
+        self.document_id = document_id
+        self.document_data = document_data
         self.__dict__.update(kwargs)
-        self.loader = self._set_loader()
-
-    def _set_loader(self):
-        """
-        Instantiates a document loader based on the document type. PDF and Excel are allowed to be loaded
-        PDF document is loaded from the BaseLoader langchain class
-        Excel document is loaded from a custom loder inherented from the langchain class
-        """
-        if self.document_type.lower() == "googlesheet":
-            logger.info("Loading from Google Sheet with pandas.")
-            sheet_name = "Q%26As"
-            url = f"https://docs.google.com/spreadsheets/d/{self.document_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
-            return url
-        else:
-            raise NotImplementedError(
-                f"Loader of document type {self.document_type} not available. Only loading of 'googlesheet' is currently implemented."
-            )
 
     def _to_dataframe(self):
+        """
+        Loads a pandas DataFrame based on the document type. Google Sheet and JSON are currently supported.
+        """
         if self.document_type.lower() == "googlesheet":
-            df = pd.read_csv(self.loader)
-            df[dm.GOOGLE_INDEX] = df.index
-            # rename columns to standard format
-            df = df.rename(
-                columns={
-                    next(c for c in df.columns if "#CATEGORY" in c): dm.CATEGORY,
-                    next(c for c in df.columns if "#SUBCATEGORY" in c): dm.SUBCATEGORY,
-                    next(c for c in df.columns if "#SLUG" in c): dm.SLUG,
-                    next(c for c in df.columns if "#PARENT" in c): dm.PARENT,
-                    next(c for c in df.columns if "#QUESTION" in c): dm.QUESTION,
-                    next(c for c in df.columns if "#ANSWER" in c): dm.ANSWER,
-                    next(c for c in df.columns if "#VISIBLE" in c): "visible",
-                }
-            )
-            df = df[df["visible"] == "Show"]  # only visible entries
+            logger.info("Loading from Google Sheet.")
+            sheet_name = "Q%26As"
+            url = f"https://docs.google.com/spreadsheets/d/{self.document_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
+            df = pd.read_csv(url)
+        elif self.document_type.lower() == "json":
+            logger.info("Loading from JSON.")
+            if not self.document_data:
+                raise ValueError("No document data provided.")
+            df = pd.DataFrame(self.document_data["values"])
+            new_header = df.iloc[0]  # grab the first row for the header
+            df = df[1:]  # take the data less the header row
+            df.columns = new_header  # set the header row as the df header
         else:
             raise NotImplementedError(
-                f"Loader of document type {self.document_type} not available. Only loading of 'googlesheet' is currently implemented."
+                f"Loader of document type {self.document_type} not available."
             )
+        df[dm.GOOGLE_INDEX] = df.index  # add google index (row number) as a column
+        # rename columns to standard format
+        df = df.rename(
+            columns={
+                next(c for c in df.columns if "#CATEGORY" in c): dm.CATEGORY,
+                next(c for c in df.columns if "#SUBCATEGORY" in c): dm.SUBCATEGORY,
+                next(c for c in df.columns if "#SLUG" in c): dm.SLUG,
+                next(c for c in df.columns if "#PARENT" in c): dm.PARENT,
+                next(c for c in df.columns if "#QUESTION" in c): dm.QUESTION,
+                next(c for c in df.columns if "#ANSWER" in c): dm.ANSWER,
+                next(c for c in df.columns if "#VISIBLE" in c): "visible",
+            }
+        )
+        df = df[df["visible"] == "Show"]  # keep only visible entries
         return df
 
     def _load(self):

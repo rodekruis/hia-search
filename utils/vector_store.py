@@ -274,7 +274,7 @@ class VectorStore:
 
             return n_docs_added
 
-    def count_documents(self):
+    def count_documents(self) -> int:
         n_docs_in_collection = None
         if self.store_service.lower() == "chroma":
             n_docs_in_collection = self.client.get_or_create_collection(
@@ -284,8 +284,9 @@ class VectorStore:
             n_docs_in_collection = self.client.get_document_count()
         return n_docs_in_collection
 
-    def get_documents(self):
-        return self.langchain_client.get(include=["documents", "metadatas"])
+    def get_documents(self) -> List[Document]:
+        docs = [d for d in self.client.search(search_text="*")]
+        return docs
 
     def similarity_search_with_score(self, query: str, k: int):
         return self.langchain_client.similarity_search_with_score(query=query, k=k)
