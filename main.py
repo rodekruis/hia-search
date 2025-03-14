@@ -73,14 +73,13 @@ app.include_router(load.router)
 
 
 @app.get("/get-models")
-async def get_models_used_in_chatbot():
-    """Get models used in the chatbot."""
+async def get_models():
+    """Get embedding models used in vector search."""
     return JSONResponse(
         status_code=200,
         content={
-            "endpoint": os.environ["AZURE_OPENAI_ENDPOINT"],
-            "question-answering": os.environ["MODEL_QA"],
-            "embeddings": os.environ["MODEL_EMBEDDINGS"],
+            "provider": "OpenAI",
+            "model": "text-embedding-ada-002",
         },
     )
 

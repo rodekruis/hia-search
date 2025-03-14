@@ -17,7 +17,6 @@ import json
 from utils.logger import logger
 import orjson
 from typing import Any
-from time import perf_counter
 from utils.translator import translate
 import os
 
@@ -45,7 +44,20 @@ for index in azure_search_index_client.list_indexes():
     )
 
 
+def get_score_google_index(docs_and_scores, google_index: str) -> float:
+    """Get the maximum score for a given google_index."""
+    scores = [0.0]
+    for doc_and_score in docs_and_scores:
+        doc = doc_and_score[0]
+        score = doc_and_score[1]
+        if doc.metadata["google_index"] == google_index:
+            scores.append(score)
+    return max(scores)
+
+
 class ORJSONResponse(JSONResponse):
+    """Custom JSONResponse class that uses orjson for serialization."""
+
     media_type = "application/json"
 
     def render(self, content: Any) -> bytes:
@@ -53,6 +65,8 @@ class ORJSONResponse(JSONResponse):
 
 
 class SearchPayload(BaseModel):
+    """Search payload."""
+
     query: str = Field(
         ...,
         description="""Text of the search query""",
@@ -71,20 +85,9 @@ class SearchPayload(BaseModel):
     )
 
 
-def get_score_google_index(docs_and_scores, google_index: str):
-    """Get the maximum score for a given google_index."""
-    scores = [0.0]
-    for doc_and_score in docs_and_scores:
-        doc = doc_and_score[0]
-        score = doc_and_score[1]
-        if doc.metadata["google_index"] == google_index:
-            scores.append(score)
-    return max(scores)
-
-
 @router.post("/search")
 async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme)):
-    """Search in HIA."""
+    """Search HIA."""
 
     if api_key != os.environ["API_KEY"]:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -208,7 +211,6 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
 
     # translate results if necessary
     if payload.lang != "en":
-        logger.info(f"Translating result from en to {payload.lang}")
         for result in results:
             result[dm.QUESTION] = translate(
                 from_lang="en", to_lang=payload.lang, text=result[dm.QUESTION]

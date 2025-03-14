@@ -11,7 +11,6 @@ from utils.document_loader import DocumentLoader
 from utils.document_chunker import DocumentChunker
 from utils.vector_store import VectorStore, googleid_to_vectorstoreid
 from utils.constants import DocumentMetadata
-from utils.logger import logger
 from routes.search import azure_search_index_client
 import os
 
