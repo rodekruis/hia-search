@@ -1,5 +1,3 @@
-import copy
-from collections import OrderedDict
 from typing import List
 from langchain.schema import Document
 import pandas as pd
@@ -7,7 +5,7 @@ from utils.constants import DocumentMetadata
 from utils.logger import logger
 from langchain_community.document_loaders import DataFrameLoader
 import uuid
-import re
+from fastapi import HTTPException
 from cleantext import clean
 
 dm = DocumentMetadata()
@@ -21,31 +19,8 @@ def uuid_hash(content: str) -> str:
 class DocumentLoader:
     """
     Document loading class that:
-        1. Loads documents from path
-        2. Uses the hash of the page content to create a unique documentID
-        3. Returns list of Langchain Document
-
-    Input
-    --------
-    document_id:
-        str
-        Unique identifier of the document
-    document_type:
-        str
-        Data type of document(s)
-    kwargs:
-        dict
-        Input parameters that are conditional to the document type
-
-    Output
-    --------
-    The output is a list in Document type. Each element has two attributes:
-    page_content:
-        str
-        Content of documents
-    metadata:
-        dictionary
-        Information of each page_content
+        1. Loads documents from source
+        2. Returns list of Langchain Documents
     """
 
     output: List[Document]
@@ -74,14 +49,17 @@ class DocumentLoader:
         elif self.document_type.lower() == "json":
             logger.info("Loading from JSON.")
             if not self.document_data:
-                raise ValueError("No document data provided.")
+                raise HTTPException(
+                    status_code=400, detail="No document data provided."
+                )
             df = pd.DataFrame(self.document_data["values"])
             new_header = df.iloc[0]  # grab the first row for the header
             df = df[1:]  # take the data less the header row
             df.columns = new_header  # set the header row as the df header
         else:
-            raise NotImplementedError(
-                f"Loader of document type {self.document_type} not available."
+            raise HTTPException(
+                status_code=500,
+                detail=f"Loader of document type {self.document_type} not available.",
             )
         df[dm.GOOGLE_INDEX] = df.index  # add google index (row number) as a column
         # rename columns to standard format

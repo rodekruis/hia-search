@@ -3,7 +3,7 @@ import re
 import copy
 from pathlib import Path
 from typing import List
-
+from fastapi import HTTPException
 from chromadb import PersistentClient
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_openai import AzureOpenAIEmbeddings
@@ -11,7 +11,6 @@ from langchain.schema import Document
 from langchain_community.vectorstores import Chroma
 from langchain_community.vectorstores.azuresearch import AzureSearch
 from azure.core.credentials import AzureKeyCredential
-from azure.core.exceptions import ResourceNotFoundError
 from azure.search.documents import SearchClient
 from azure.search.documents.indexes import SearchIndexClient
 from azure.search.documents.indexes.models import (
@@ -54,32 +53,7 @@ class VectorStore:
     """
     Vector storage for chunked documents and embeddings
         1. Embeds chunked documents
-        2. Save to or loads from path
-        3. Optionally embeds and adds new chunked documents to existing DB
-
-    Input
-    --------
-    store_path:
-        str
-        path to store the vectors
-    store_service:
-        str
-        name of the store service, currently supports 'chroma' and 'azuresearch'
-    store_password:
-        str
-        password for the store service (e.g. for Azure Search)
-    embedding_source:
-        str
-        name of the source of the embedding model
-    embedding_model:
-        str
-        name of the embedding model
-    store_id:
-        str
-        id of the collection (Chroma) or index (Azure Search)
-    chunked_documents:
-        List[Document]
-        list of chunked Langchain Documents with metadata
+        2. Save to vector store
     """
 
     output: List[Document]
@@ -121,11 +95,13 @@ class VectorStore:
             return HuggingFaceEmbeddings(model_name=self.embedding_model)
 
         else:
-            raise NotImplementedError(
-                f"Embedding source {self.embedding_source} not available. Only embedding models from 'HuggingFace' or 'OpenAI' are currently available."
+            raise HTTPException(
+                status_code=500,
+                detail=f"Embedding source {self.embedding_source} not available. Only embedding models from 'HuggingFace' or 'OpenAI' are currently available.",
             )
 
     def _create_azuresearch_index(self):
+        """Create a new index in Azure Search"""
         client = SearchIndexClient(
             self.store_path, AzureKeyCredential(self.store_password)
         )
@@ -189,8 +165,9 @@ class VectorStore:
                 credential=AzureKeyCredential(self.store_password),
             )
         else:
-            raise NotImplementedError(
-                f"Vectore store {self.store_service} not available. Only 'chroma' or 'azuresearch' are currently available."
+            raise HTTPException(
+                status_code=500,
+                detail=f"Vectore store {self.store_service} not available. Only 'chroma' or 'azuresearch' are currently available.",
             )
 
     def _add_embedding_model_to_metadata(self, metadatas: list) -> List[dict]:
@@ -222,8 +199,9 @@ class VectorStore:
                 embedding_function=self.embedder.embed_query,
             )
         else:
-            raise NotImplementedError(
-                f"Vectore store {self.store_service} not available. Only 'chroma' or 'azuresearch' are currently available."
+            raise HTTPException(
+                status_code=500,
+                detail=f"Vectore store {self.store_service} not available. Only 'chroma' or 'azuresearch' are currently available.",
             )
 
     def add_documents(self, chunked_documents: List[Document]) -> int:
@@ -275,6 +253,7 @@ class VectorStore:
             return n_docs_added
 
     def count_documents(self) -> int:
+        """Count the number of documents in the vector store"""
         n_docs_in_collection = None
         if self.store_service.lower() == "chroma":
             n_docs_in_collection = self.client.get_or_create_collection(
@@ -285,8 +264,15 @@ class VectorStore:
         return n_docs_in_collection
 
     def get_documents(self) -> List[Document]:
-        docs = [d for d in self.client.search(search_text="*")]
+        """Get all documents from the vector store"""
+        if self.store_service.lower() == "chroma":
+            docs = self.client.get_all_documents()
+        elif self.store_service.lower() == "azuresearch":
+            docs = [d for d in self.client.search(search_text="*")]
         return docs
 
-    def similarity_search_with_score(self, query: str, k: int):
+    def similarity_search_with_score(
+        self, query: str, k: int
+    ) -> List[(Document, float)]:
+        """Search for similar documents in the vector store"""
         return self.langchain_client.similarity_search_with_score(query=query, k=k)

@@ -14,22 +14,7 @@ dm = DocumentMetadata()
 
 class DocumentChunker:
     """
-    Document chunking class that:
-        1. Chunk the documents into smaller pieces, so that it's ready for embedding.
-        2. Add metadata on chunk level: nth number of chunk in document, chunk ID
-        3. Returns chunked documents with metadata
-
-    Input
-    --------
-    documents:
-        List[Document]
-        list of loaded documents
-    chunking_strategy:
-        str
-        chunking strategy, f.e. tokenized sentence chunking
-    kwargs:
-        TypedDict
-        input parameters that are conditional to the chunking strategy
+    Document chunking class that splits documents into chunks based on the chunking strategy.
     """
 
     output: List[Document]
@@ -41,7 +26,7 @@ class DocumentChunker:
 
     def _set_chunker(self):
         """instantiates a document chunker based on the document strategy.
-        Custom chunking strategies can be added by creating one that inherets from the ** langchain class.
+        Custom chunking strategies can be added by creating one that inherits from the ** langchain class.
         and adding them here.
         """
         if self.chunking_strategy.lower() == "sentencesplitting":

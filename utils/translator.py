@@ -7,6 +7,7 @@ load_dotenv()
 
 
 def translate(from_lang: str, to_lang: str, text: str) -> str:
+    """Translate text from one language to another."""
     if pd.isna(text):
         return ""
     translator_params = {"api-version": "3.0", "to": [to_lang], "from": [from_lang]}
