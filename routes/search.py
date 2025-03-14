@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import pandas as pd
 from fastapi import (
     Depends,
     APIRouter,
@@ -11,11 +13,12 @@ from azure.search.documents.indexes import SearchIndexClient
 from azure.core.credentials import AzureKeyCredential
 from utils.vector_store import VectorStore, googleid_to_vectorstoreid
 from utils.constants import DocumentMetadata
-from utils.document_loader import DocumentLoader
+import json
 from utils.logger import logger
 import orjson
 from typing import Any
 from time import perf_counter
+from utils.translator import translate
 import os
 
 dm = DocumentMetadata()
@@ -52,41 +55,24 @@ class ORJSONResponse(JSONResponse):
 class SearchPayload(BaseModel):
     query: str = Field(
         ...,
-        description="""
-        Text of the question""",
+        description="""Text of the search query""",
     )
     googleSheetId: str = Field(
         ...,
-        description="""
-        HIA Google sheet ID""",
+        description="""HIA Google sheet ID""",
     )
     k: int = Field(
         5,
         description="""Number of results to return""",
     )
-
-
-class Reference(BaseModel):
-    category: str
-    subcategory: str
-    slug: str
-    parent: str
-
-
-class AnswerWithReferences(BaseModel):
-    answer: str = Field(
-        ...,
-        description="""
-        Text of the answer""",
-    )
-    references: list[Reference] = Field(
-        ...,
-        description="""
-        list of references to documents in the vector store""",
+    lang: str = Field(
+        "en",
+        description="""Language of the search query; results will be translated to this language""",
     )
 
 
 def get_score_google_index(docs_and_scores, google_index: str):
+    """Get the maximum score for a given google_index."""
     scores = [0.0]
     for doc_and_score in docs_and_scores:
         doc = doc_and_score[0]
@@ -98,19 +84,10 @@ def get_score_google_index(docs_and_scores, google_index: str):
 
 @router.post("/search")
 async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme)):
-    """Ask something to the chatbot and get an answer."""
+    """Search in HIA."""
 
     if api_key != os.environ["API_KEY"]:
         raise HTTPException(status_code=401, detail="Unauthorized")
-
-    # load document from Google Sheet
-    t2_start = perf_counter()
-    doc_loader = DocumentLoader(
-        document_type="googlesheet", document_id=payload.googleSheetId
-    )
-    df = doc_loader._to_dataframe()
-    t2_stop = perf_counter()
-    logger.info(f"Elapsed time loading dataframe: {float(t2_stop - t2_start)} seconds")
 
     # load vector store
     vector_store_id = googleid_to_vectorstoreid(payload.googleSheetId)
@@ -131,111 +108,122 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
                 status_code=400, detail=f"Vector store {vector_store_id} not found."
             )
 
+    logger.info(f"Search query: '{payload.query}'")
+
+    # translate if necessary
+    if payload.lang != "en":
+        payload.query = translate(
+            from_lang=payload.lang, to_lang="en", text=payload.query
+        )
+        logger.info(f"Search query translated {payload.lang}->en: '{payload.lang}'")
+
     # retrieve documents
-    t2_start = perf_counter()
-    logger.info(f"Searching for {payload.k} results with query {payload.query}")
     docs_and_scores = vector_dbs[vector_store_id].similarity_search_with_score(
         query=payload.query, k=payload.k
     )
 
-    # retriever = vector_db.langchain_client.as_retriever(
-    #     search_type="similarity", k=payload.results
-    # )
-    # docs = retriever.invoke("what did the president say about ketanji brown jackson?")
-    t2_stop = perf_counter()
-    logger.info(
-        f"Elapsed time retrieving documents: {float(t2_stop - t2_start)} seconds"
-    )
-    logger.info(len(docs_and_scores))
-
     # build results they way HIA likes them
-    t2_start = perf_counter()
+    df = pd.DataFrame.from_records(
+        [
+            json.loads(doc["metadata"], strict=False)
+            for doc in vector_dbs[vector_store_id].get_documents()
+        ]
+    )  # load all documents from vector store
     results = []
     for doc_and_score in docs_and_scores:
         doc = doc_and_score[0]
         score = doc_and_score[1]
 
         result = {
-            "category": doc.metadata[dm.CATEGORY],
-            "subcategory": doc.metadata[dm.SUBCATEGORY],
-            "slug": doc.metadata[dm.SLUG],
-            "question": doc.metadata[dm.QUESTION],
-            "answer": doc.metadata[dm.ANSWER],
-            "score": score,
-            "children": None,
-            "google_index": doc.metadata[dm.GOOGLE_INDEX],
+            dm.CATEGORY: doc.metadata[dm.CATEGORY],
+            dm.SUBCATEGORY: doc.metadata[dm.SUBCATEGORY],
+            dm.SLUG: doc.metadata[dm.SLUG],
+            dm.QUESTION: doc.metadata[dm.QUESTION],
+            dm.ANSWER: doc.metadata[dm.ANSWER],
+            dm.SCORE: score,
+            dm.CHILDREN: None,
+            dm.GOOGLE_INDEX: doc.metadata[dm.GOOGLE_INDEX],
         }
 
-        # if doc is a parent question, add children
+        # if result is a parent question, add children
         if result[dm.SLUG]:
             children = []
-            df_child = df[
-                df["Name/Slug of parent Question\n#PARENT"] == result[dm.SLUG]
-            ]
-            for ix, row in df_child.iterrows():
+            df_children = df[df[dm.PARENT] == result[dm.SLUG]]
+            for ix, row in df_children.iterrows():
                 children.append(
                     {
-                        "question": row["The Question (should be 1 line)\n#QUESTION"],
-                        "content": row["The Answer (can be multi-line)\n#ANSWER"],
-                        "score": get_score_google_index(
+                        dm.CATEGORY: row[dm.CATEGORY],
+                        dm.SUBCATEGORY: row[dm.SUBCATEGORY],
+                        dm.QUESTION: row[dm.QUESTION],
+                        dm.ANSWER: row[dm.ANSWER],
+                        dm.SCORE: get_score_google_index(
                             docs_and_scores, row[dm.GOOGLE_INDEX]
                         ),
                     }
                 )
             if len(children) > 0:
-                result["children"] = children
+                result[dm.CHILDREN] = children
 
-        # if doc is a child question, add parent and siblings
+        # if result is a child question, add parent and siblings
         if doc.metadata[dm.PARENT]:
-            parent = df[
-                df["Unique name/part of URL\n#SLUG"] == doc.metadata[dm.PARENT]
-            ].to_dict(orient="records")
+            parent = df[df[dm.SLUG] == doc.metadata[dm.PARENT]].to_dict(
+                orient="records"
+            )
             if len(parent) > 0:
                 parent = parent[0]
                 children = []
-                df_child = df[
-                    df["Name/Slug of parent Question\n#PARENT"]
-                    == parent["Unique name/part of URL\n#SLUG"]
-                ]
-                for ix, row in df_child.iterrows():
+                df_children = df[df[dm.PARENT] == parent[dm.SLUG]]
+                for ix, row in df_children.iterrows():
                     children.append(
                         {
-                            "question": row[
-                                "The Question (should be 1 line)\n#QUESTION"
-                            ],
-                            "content": row["The Answer (can be multi-line)\n#ANSWER"],
-                            "score": get_score_google_index(
+                            dm.CATEGORY: row[dm.CATEGORY],
+                            dm.SUBCATEGORY: row[dm.SUBCATEGORY],
+                            dm.QUESTION: row[dm.QUESTION],
+                            dm.ANSWER: row[dm.ANSWER],
+                            dm.SCORE: get_score_google_index(
                                 docs_and_scores, row[dm.GOOGLE_INDEX]
                             ),
                         }
                     )
                 result = {
-                    "category": parent["Category ID\n#CATEGORY"],
-                    "subcategory": parent["Sub-Category ID\n#SUBCATEGORY"],
-                    "slug": parent["Unique name/part of URL\n#SLUG"],
-                    "question": parent["The Question (should be 1 line)\n#QUESTION"],
-                    "answer": parent["The Answer (can be multi-line)\n#ANSWER"],
-                    "score": get_score_google_index(
+                    dm.CATEGORY: parent[dm.CATEGORY],
+                    dm.SUBCATEGORY: parent[dm.SUBCATEGORY],
+                    dm.SLUG: parent[dm.SLUG],
+                    dm.QUESTION: parent[dm.QUESTION],
+                    dm.ANSWER: parent[dm.ANSWER],
+                    dm.SCORE: get_score_google_index(
                         docs_and_scores, doc.metadata[dm.GOOGLE_INDEX]
                     ),
-                    "children": children,
-                    "google_index": parent[dm.GOOGLE_INDEX],
+                    dm.CHILDREN: children,
+                    dm.GOOGLE_INDEX: parent[dm.GOOGLE_INDEX],
                 }
 
         results.append(result)
 
-    logger.info(f"results: {results}")
-
     # keep only unique results
-    results = list({v["google_index"]: v for v in results}.values())
+    results = list({v[dm.GOOGLE_INDEX]: v for v in results}.values())
     # remove google_index from results
     for result in results:
-        result.pop("google_index")
+        result.pop(dm.GOOGLE_INDEX)
 
-    t2_stop = perf_counter()
-    logger.info(f"Elapsed time preparing results: {float(t2_stop - t2_start)} seconds")
-    logger.info(f"{len(results)} results found")
-    logger.info(f"results: {results}")
+    # translate results if necessary
+    if payload.lang != "en":
+        logger.info(f"Translating result from en to {payload.lang}")
+        for result in results:
+            result[dm.QUESTION] = translate(
+                from_lang="en", to_lang=payload.lang, text=result[dm.QUESTION]
+            )
+            result[dm.ANSWER] = translate(
+                from_lang="en", to_lang=payload.lang, text=result[dm.ANSWER]
+            )
+            if result["children"]:
+                for child in result["children"]:
+                    child[dm.QUESTION] = translate(
+                        from_lang="en", to_lang=payload.lang, text=child[dm.QUESTION]
+                    )
+                    child[dm.ANSWER] = translate(
+                        from_lang="en", to_lang=payload.lang, text=child[dm.ANSWER]
+                    )
 
     return ORJSONResponse(
         status_code=200,

@@ -25,8 +25,11 @@ key_query_scheme = APIKeyHeader(name="Authorization")
 class VectorStorePayload(BaseModel):
     googleSheetId: str = Field(
         ...,
-        description="""
-    HIA Google sheet ID""",
+        description="HIA Google sheet ID",
+    )
+    data: dict = Field(
+        {},
+        description=" JSON data from Google Sheet",
     )
 
 
@@ -41,9 +44,16 @@ async def create_vector_store(
 
     vector_store_id = googleid_to_vectorstoreid(payload.googleSheetId)
 
+    if payload.data:
+        document_type = "json"
+    else:
+        document_type = "googlesheet"
+
     # load documents from Google Sheet
     doc_loader = DocumentLoader(
-        document_type="googlesheet", document_id=payload.googleSheetId
+        document_type=document_type,
+        document_id=payload.googleSheetId,
+        document_data=payload.data,
     )
     docs = doc_loader.load()
 
