@@ -74,7 +74,7 @@ class DocumentLoader:
                 next(c for c in df.columns if "#VISIBLE" in c): "visible",
             }
         )
-        df = df[df["visible"] == "Show"]  # keep only visible entries
+        df = df[df["visible"] != "Hide"]  # keep what's not hidden
         return df
 
     def _load(self):
