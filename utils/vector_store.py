@@ -82,14 +82,12 @@ class VectorStore:
         If no embedding model is given, a default model is used.
         """
         if self.embedding_source.lower() == "openai":
-            logger.info("Using OpenAI embedding model to embed the documents")
             return AzureOpenAIEmbeddings(
                 deployment=self.embedding_model,
                 chunk_size=1,
             )
 
         elif self.embedding_source.lower() == "huggingface":
-            logger.info("Using Hugging Face embedding model to embed the documents")
             if self.embedding_model is None:
                 self.embedding_model = DEFAULT_HUGGING_FACE_MODEL
             return HuggingFaceEmbeddings(model_name=self.embedding_model)

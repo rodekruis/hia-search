@@ -42,7 +42,7 @@ class DocumentLoader:
         Loads a pandas DataFrame based on the document type. Google Sheet and JSON are currently supported.
         """
         if self.document_type.lower() == "googlesheet":
-            logger.info("Loading from Google Sheet.")
+            logger.info(f"Loading {self.document_id} from Google Sheet.")
             sheet_name = "Q%26As"
             url = f"https://docs.google.com/spreadsheets/d/{self.document_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
             df = pd.read_csv(url)
@@ -164,7 +164,6 @@ class DocumentLoader:
         Loads the documents
         Validates whether they are properly loaded
         """
-        logger.info(f"Started loading")
         documents = self._load()
         valid_documents = self._validate_loading(documents)
         logger.info(f"Loaded {len(valid_documents)} documents")
