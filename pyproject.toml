@@ -23,6 +23,7 @@ langchain-openai = "*"
 orjson = "*"
 pandas = "*"
 spacy = "*"
+Unidecode = "*"
 
 [build-system]
 requires = ["poetry-core"]
