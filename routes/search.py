@@ -118,7 +118,9 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
         payload.query = translate(
             from_lang=payload.lang, to_lang="en", text=payload.query
         )
-        logger.info(f"Search query translated {payload.lang}->en: '{payload.lang}'")
+        logger.info(
+            f"Search query translated from {payload.lang} to en: '{payload.query}'"
+        )
 
     # retrieve documents
     docs_and_scores = vector_dbs[vector_store_id].similarity_search_with_score(
