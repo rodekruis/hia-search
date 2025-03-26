@@ -79,7 +79,7 @@ async def get_models():
         status_code=200,
         content={
             "provider": "OpenAI",
-            "model": "text-embedding-ada-002",
+            "model": os.environ["MODEL_EMBEDDINGS"],
         },
     )
 
