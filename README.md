@@ -16,7 +16,9 @@ Largely inspired by the projects [`knowledge-enriched-chatbot`](https://github.c
 
 The `/create-vector-store` endpoint accepts a `googleSheetId` parameter, fetches all data from the Q&A sheet, and creates an [index](https://learn.microsoft.com/en-us/azure/search/search-what-is-an-index) in Azure AI Search. If the index already exists, its content will be updated.
 
-If the Q&A sheet is not publicly accessible, you can pass its content to the `data` parameter. The content must be a valid JSON object structured as [this](https://github.com/rodekruis/helpful-information/blob/main/data/test-sheet-id-1/values/Q%26As.json).
+If the Q&A sheet is not publicly accessible, you can pass its content to the `data` parameter. The content must be a valid JSON object structured as the [test-data from the `helpful-information`-app](https://github.com/rodekruis/helpful-information/blob/main/data/test-sheet-id-1/values/Q%26As.json).
+
+🔐 This endpoint is protected with the `API_KEY_WRITE` environment-variable, to prevent unauthorized users from modifying the index.
 
 ## `/search`
 
@@ -50,7 +52,10 @@ and returns a list of relevant questions and answers, in this format:
 ]
  ```
 
-For the rest, see [the docs](https://hia-chatbot.azurewebsites.net/docs).
+ This endpoint is protected with the `API_KEY` environment variable. As this key will be stored by the client-application in plain-text, visible in the browser, it should be considered public. Its main purpose is to prevent abuse of the API by unauthorized users (with possible future measures against it).
+
+For the rest, see [the `/docs`](https://hia-search.azurewebsites.net/docs).  
+Or locally at: <http://localhost:8000/docs>.
 
 ## Configuration
 

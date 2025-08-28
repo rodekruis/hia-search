@@ -38,7 +38,7 @@ async def create_vector_store(
 ):
     """Create a vector store from a HIA instance. Replace all entries if it already exists."""
 
-    if api_key != os.environ["API_KEY"]:
+    if api_key != os.environ["API_KEY_WRITE"]:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     vector_store_id = googleid_to_vectorstoreid(payload.googleSheetId)
