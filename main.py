@@ -4,10 +4,7 @@ from fastapi import (
     FastAPI,
 )
 from fastapi.responses import RedirectResponse, JSONResponse
-from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
-from azure.search.documents.indexes import SearchIndexClient
-from azure.core.credentials import AzureKeyCredential
 from routes import search, load
 import os
 import logging
