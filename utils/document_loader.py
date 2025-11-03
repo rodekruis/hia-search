@@ -74,7 +74,13 @@ class DocumentLoader:
                 next(c for c in df.columns if "#VISIBLE" in c): "visible",
             }
         )
-        df = df[df["visible"] != "Hide"]  # keep what's not hidden
+        # Filter out rows with empty CATEGORY or SUBCATEGORY
+        df = df[df[dm.CATEGORY].astype(str).str.strip() != ""]
+        df = df[df[dm.SUBCATEGORY].astype(str).str.strip() != ""]
+        df = df[df[dm.QUESTION].astype(str).str.strip() != ""]
+        df = df[df[dm.ANSWER].astype(str).str.strip() != ""]
+        # Filter out what's hidden
+        df = df[~df["visible"].astype(str).str.lower().isin(["hide", "hidden", "no", "0", "-"])]
         return df
 
     def _load(self):
