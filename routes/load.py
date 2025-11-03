@@ -7,11 +7,12 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
+from azure.search.documents.indexes import SearchIndexClient
+from azure.core.credentials import AzureKeyCredential
 from utils.document_loader import DocumentLoader
 from utils.document_chunker import DocumentChunker
 from utils.vector_store import VectorStore, googleid_to_vectorstoreid
 from utils.constants import DocumentMetadata
-from routes.search import azure_search_index_client
 import os
 
 dm = DocumentMetadata()
@@ -89,6 +90,10 @@ async def delete_vector_store(
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     vector_store_id = googleid_to_vectorstoreid(payload.googleSheetId)
+    azure_search_index_client = SearchIndexClient(
+        os.environ["VECTOR_STORE_ADDRESS"],
+        AzureKeyCredential(os.environ["VECTOR_STORE_PASSWORD"]),
+    )
 
     try:
         _ = azure_search_index_client.delete_index(vector_store_id)

@@ -5,7 +5,7 @@ from fastapi import (
 )
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from routes import search, load
+from routes import search, load, chat
 import os
 import logging
 import sys
@@ -67,6 +67,7 @@ async def docs_redirect():
 # Include routes
 app.include_router(search.router)
 app.include_router(load.router)
+app.include_router(chat.router)
 
 
 @app.get("/get-models")
@@ -76,7 +77,8 @@ async def get_models():
         status_code=200,
         content={
             "provider": "OpenAI",
-            "model": os.environ["MODEL_EMBEDDINGS"],
+            "model embeddings": os.environ["MODEL_EMBEDDINGS"],
+            "model chat": os.environ["MODEL_CHAT"],
         },
     )
 

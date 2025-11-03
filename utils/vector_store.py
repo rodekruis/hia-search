@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from chromadb import PersistentClient
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_openai import AzureOpenAIEmbeddings
-from langchain.schema import Document
+from langchain_core.documents import Document
 from langchain_community.vectorstores import Chroma
 from langchain_community.vectorstores.azuresearch import AzureSearch
 from azure.core.credentials import AzureKeyCredential
@@ -28,6 +28,7 @@ from azure.search.documents.indexes.models import (
 )
 from utils.logger import logger
 from utils.constants import DocumentMetadata
+import os
 
 DEFAULT_HUGGING_FACE_MODEL = "sentence-transformers/all-mpnet-base-v2"
 
@@ -269,8 +270,31 @@ class VectorStore:
             docs = [d for d in self.client.search(search_text="*")]
         return docs
 
+    def similarity_search(self, query: str, k: int) -> List[Document]:
+        """Search for similar documents in the vector store"""
+        return self.langchain_client.similarity_search(query=query, k=k)
+
     def similarity_search_with_score(
         self, query: str, k: int
     ) -> List[(Document, float)]:
-        """Search for similar documents in the vector store"""
+        """Search for similar documents in the vector store and return with scores"""
         return self.langchain_client.similarity_search_with_score(query=query, k=k)
+
+
+def get_vector_store(vector_store_id: str) -> VectorStore:
+    """Get vector store from Azure Search."""
+    try:
+        vector_store = VectorStore(
+            store_path=os.environ["VECTOR_STORE_ADDRESS"],
+            store_service="azuresearch",
+            store_password=os.environ["VECTOR_STORE_PASSWORD"],
+            embedding_source="OpenAI",
+            embedding_model=os.environ["MODEL_EMBEDDINGS"],
+            store_id=vector_store_id,
+        )
+    except Exception as ex:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Vector store {vector_store_id} not found, did you create it?",
+        )
+    return vector_store

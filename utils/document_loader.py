@@ -1,5 +1,5 @@
 from typing import List
-from langchain.schema import Document
+from langchain_core.documents import Document
 import pandas as pd
 from utils.constants import DocumentMetadata
 from utils.logger import logger
@@ -80,7 +80,12 @@ class DocumentLoader:
         df = df[df[dm.QUESTION].astype(str).str.strip() != ""]
         df = df[df[dm.ANSWER].astype(str).str.strip() != ""]
         # Filter out what's hidden
-        df = df[~df["visible"].astype(str).str.lower().isin(["hide", "hidden", "no", "0", "-"])]
+        df = df[
+            ~df["visible"]
+            .astype(str)
+            .str.lower()
+            .isin(["hide", "hidden", "no", "0", "-"])
+        ]
         return df
 
     def _load(self):
