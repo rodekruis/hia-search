@@ -9,10 +9,10 @@ load_dotenv(".env")
 with st.sidebar:
     api_key = st.text_input("Aidly API Key", key="chatbot_api_key", type="password")
     google_sheet_id = st.text_input(
-        "HIA Google Sheet ID", key="chatbot_api_key", type="password"
+        "HIA Google Sheet ID", key="google_sheet_id", type="password"
     )
 
-st.title("❣️ Aidly")
+st.title("ℹ️️ Aidly")
 st.caption("Aids you with helpful information.")
 
 # Initialize chat history
@@ -40,10 +40,10 @@ if prompt := st.chat_input():
 
     # make a POST request to chat API
     answer = requests.post(
-        "http://127.0.0.1:8000/chat",
-        # "https://hia-search.azurewebsites.net/ask",
-        headers={"Authorization": os.environ["API_KEY"]},
-        json={"question": prompt},
+        # "http://127.0.0.1:8000/chat",
+        "https://hia-search-dev.azurewebsites.net/chat",
+        headers={"Authorization": api_key},
+        json={"question": prompt, "googleSheetId": google_sheet_id},
     )
 
     response = answer.content.decode("utf-8")

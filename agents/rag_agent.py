@@ -8,7 +8,7 @@ from langchain_core.messages import SystemMessage
 from langchain_core.tools import tool
 from langgraph.graph import END
 from langgraph.prebuilt import ToolNode, tools_condition
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, Field
 import os
 from utils.vector_store import get_vector_store
@@ -110,5 +110,5 @@ graph_builder.add_conditional_edges(
 graph_builder.add_edge("tools", "generate")
 graph_builder.add_edge("generate", END)
 
-memory = MemorySaver()  # in-memory checkpointer
+memory = InMemorySaver()  # in-memory checkpointer
 rag_agent = graph_builder.compile(checkpointer=memory)

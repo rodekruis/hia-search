@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from typing import Annotated
 from fastapi import (
     Depends,
     Request,
+    Form,
     APIRouter,
     HTTPException,
 )
 from fastapi.security import APIKeyHeader
+from twilio.twiml.messaging_response import MessagingResponse
 from pydantic import BaseModel, Field
 from utils.vector_store import googleid_to_vectorstoreid
 from agents.rag_agent import rag_agent
@@ -17,42 +20,50 @@ router = APIRouter()
 key_query_scheme = APIKeyHeader(name="Authorization")
 
 
-class QuestionPayload(BaseModel):
-    question: str = Field(
-        ...,
-        description="""
-        Text of the question""",
-    )
-    googleSheetId: str = Field(
-        ...,
-        description="""HIA Google sheet ID""",
-    )
+# class MessagePayload(BaseModel):
+#     message: str = Field(
+#         ...,
+#         description="""
+#         Text of the message""",
+#     )
 
 
-@router.post("/chat")
+@router.post("/twilio_chat")
 async def chat(
-    payload: QuestionPayload, request: Request, api_key: str = Depends(key_query_scheme)
+    google_sheet_id: str,
+    request: Request,
+    # api_key: str = Depends(key_query_scheme),
 ):
-    """Ask something to the chatbot and get an answer."""
+    """Chat endpoint for Twilio Messaging Webhook."""
+    form_data = await request.form()
+    message = form_data.get("Body", None)
+    print("Received message:", message)
+    print("Google Sheet ID:", google_sheet_id)
 
-    if api_key != os.environ["API_KEY"]:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    resp = MessagingResponse()
+    resp.message("Hi!")
 
-    # use client host as memory thread ID
-    client_host = request.client.host
-    config = {"configurable": {"thread_id": client_host}}
-    vector_store_id = googleid_to_vectorstoreid(payload.googleSheetId)
+    # if api_key != os.environ["API_KEY"]:
+    #     raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # invoke the agent graph with the question
-    response = rag_agent.invoke(
-        {
-            "messages": [
-                {"role": "system", "content": f"vector_store_id is {vector_store_id}"},
-                {"role": "user", "content": payload.question},
-            ]
-        },
-        config=config,
-    )
-    answer = response["messages"][-1].content
+    # message_form = await request.form()
+    # message = message_form.get("Body")
+    #
+    # # use client host as memory thread ID
+    # client_host = request.client.host
+    # config = {"configurable": {"thread_id": client_host}}
+    # vector_store_id = googleid_to_vectorstoreid(google_sheet_id)
+    #
+    # # invoke the agent graph with the question
+    # response = rag_agent.invoke(
+    #     {
+    #         "messages": [
+    #             {"role": "system", "content": f"vector_store_id is {vector_store_id}"},
+    #             {"role": "user", "content": message},
+    #         ]
+    #     },
+    #     config=config,
+    # )
+    # answer = response["messages"][-1].content
 
-    return answer
+    return str(resp)

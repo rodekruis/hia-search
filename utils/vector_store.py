@@ -283,18 +283,17 @@ class VectorStore:
 
 def get_vector_store(vector_store_id: str) -> VectorStore:
     """Get vector store from Azure Search."""
-    try:
-        vector_store = VectorStore(
-            store_path=os.environ["VECTOR_STORE_ADDRESS"],
-            store_service="azuresearch",
-            store_password=os.environ["VECTOR_STORE_PASSWORD"],
-            embedding_source="OpenAI",
-            embedding_model=os.environ["MODEL_EMBEDDINGS"],
-            store_id=vector_store_id,
-        )
-    except Exception as ex:
+    vector_store = VectorStore(
+        store_path=os.environ["VECTOR_STORE_ADDRESS"],
+        store_service="azuresearch",
+        store_password=os.environ["VECTOR_STORE_PASSWORD"],
+        embedding_source="OpenAI",
+        embedding_model=os.environ["MODEL_EMBEDDINGS"],
+        store_id=vector_store_id,
+    )
+    if vector_store.client.get_document_count() == 0:
         raise HTTPException(
             status_code=400,
-            detail=f"Vector store {vector_store_id} not found, did you create it?",
+            detail=f"Vector store {vector_store_id} is empty or does not exist, did you create it?",
         )
     return vector_store
