@@ -22,11 +22,11 @@ If the Q&A sheet is not publicly accessible, you can pass its content to the `da
 
 ## `/chat-twilio-webhook`
 
-Chat endpoint for [Twilio Incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook). To set it up, you first need an active number in Twilio, [here's how to buy one](https://help.twilio.com/articles/223135247-How-to-Search-for-and-Buy-a-Twilio-Phone-Number-from-Console). Select that number and [configure the webhook in Twilio](https://www.twilio.com/docs/messaging/tutorials/how-to-receive-and-reply/python#configure-your-webhook-url) using this endpoint as URL, with the Google sheet ID as parameter. Example:
+Chat endpoint for [Twilio Incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook). To set it up, you first need an active number in Twilio, [here's how to buy one](https://help.twilio.com/articles/223135247-How-to-Search-for-and-Buy-a-Twilio-Phone-Number-from-Console). Select that number and [configure the webhook in Twilio](https://www.twilio.com/docs/messaging/tutorials/how-to-receive-and-reply/python#configure-your-webhook-url) using this endpoint as URL, with the Google sheet ID as parameter (must be already indexed via `/create-vector-store`). Example:
 ```
 https://hia-search-dev.azurewebsites.net/chat-twilio-webhook?google_sheet_id=14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04
 ```
-The chatbot answers will be sent via message to whoever contacted the selected number. The phone number of the user will be used as thread ID (basically, for the model to remember the conversation).
+The chatbot answers will be sent via message to whoever contacted the selected number. The phone number of the user will be used as thread ID (basically, for the model to remember the conversation). 
 
 ## `/search`
 
@@ -39,28 +39,30 @@ The `/search` endpoint accepts three parameters:
 and returns a list of relevant questions and answers, in this format:
 
 ```json
- [
-    {
-        "categoryID": 8,
-        "subcategoryID": 38,
-        "slug": "disabilities",
-        "question": "Where can I go when I have special care needs?",
-        "answer": "To receive specialist care, you often first need a referral from your General Practitioner (GP).",
-        "score": 0.3011241257190705,
-        "children": [
-            {
-                "categoryID": 8,
-                "subcategoryID": 38,
-                "question": "Social Security Act (WMO)",
-                "answer": "Support for persons with disabilities is provided through the Social Security Act (WMO).",
-                "score": 0
-            }
-        ]
-    }
-]
+{"results":
+    [
+        {
+            "categoryID": 8,
+            "subcategoryID": 38,
+            "slug": "disabilities",
+            "question": "Where can I go when I have special care needs?",
+            "answer": "To receive specialist care, you often first need a referral from your General Practitioner (GP).",
+            "score": 0.3011241257190705,
+            "children": [
+                {
+                    "categoryID": 8,
+                    "subcategoryID": 38,
+                    "question": "Social Security Act (WMO)",
+                    "answer": "Support for persons with disabilities is provided through the Social Security Act (WMO).",
+                    "score": 0
+                }
+            ]
+        }
+    ]
+}
  ```
 
- This endpoint is protected with the `API_KEY` environment variable. As this key will be stored by the client-application in plain-text, visible in the browser, it should be considered public. Its main purpose is to prevent abuse of the API by unauthorized users (with possible future measures against it).
+ 🔐 This endpoint is protected with the `API_KEY` environment variable. As this key will be stored by the client-application in plain-text, visible in the browser, it should be considered public. Its main purpose is to prevent abuse of the API by unauthorized users (with possible future measures against it).
 
 For the rest, see [the `/docs`](https://hia-search.azurewebsites.net/docs).  
 Or locally at: <http://localhost:8000/docs>.
@@ -78,6 +80,7 @@ Edit the provided [ENV-variables](./example.env) accordingly.
 ```sh
 pip install poetry
 poetry install --no-root
+python -m spacy download en_core_web_sm
 uvicorn main:app --reload
 ```
 
