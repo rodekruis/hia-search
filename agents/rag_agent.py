@@ -19,7 +19,7 @@ load_dotenv()
 
 @dataclass
 class ContextSchema:
-    vector_store_id: str
+    google_sheet_id: str
 
 
 # Initialize the LLM client
@@ -35,14 +35,14 @@ class RetrieveInput(BaseModel):
     """Input schema for retrieval tool."""
 
     query: str = Field(description="The search query to retrieve relevant documents.")
-    vector_store_id: str = Field(description="The ID of the vector store to search.")
+    google_sheet_id: str = Field(description="The ID of the Google Sheet to search.")
 
 
 # Retrieval tool
 @tool(response_format="content_and_artifact", args_schema=RetrieveInput)
-def retrieve(query: str, vector_store_id: str) -> tuple[str, List[Document]]:
+def retrieve(query: str, google_sheet_id: str) -> tuple[str, List[Document]]:
     """Retrieve information related to a query."""
-    vector_store = get_vector_store(vector_store_id=vector_store_id)
+    vector_store = get_vector_store(google_sheet_id)
     retrieved_docs = vector_store.similarity_search(query, k=10)
     serialized = "\n\n".join(f"Document: {doc.page_content}" for doc in retrieved_docs)
     return serialized, retrieved_docs

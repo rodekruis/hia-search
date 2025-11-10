@@ -281,8 +281,9 @@ class VectorStore:
         return self.langchain_client.similarity_search_with_score(query=query, k=k)
 
 
-def get_vector_store(vector_store_id: str) -> VectorStore:
+def get_vector_store(google_sheet_id: str) -> VectorStore:
     """Get vector store from Azure Search."""
+    vector_store_id = googleid_to_vectorstoreid(google_sheet_id)
     vector_store = VectorStore(
         store_path=os.environ["VECTOR_STORE_ADDRESS"],
         store_service="azuresearch",
@@ -294,6 +295,6 @@ def get_vector_store(vector_store_id: str) -> VectorStore:
     if vector_store.client.get_document_count() == 0:
         raise HTTPException(
             status_code=400,
-            detail=f"Vector store {vector_store_id} is empty or does not exist, did you create it?",
+            detail=f"No vector store found for google_sheet_id {google_sheet_id}",
         )
     return vector_store
