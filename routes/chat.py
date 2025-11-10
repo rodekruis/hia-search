@@ -18,7 +18,7 @@ key_query_scheme = APIKeyHeader(name="Authorization")
 
 @router.post("/chat-twilio-webhook", tags=["chat"])
 async def chat_twilio_webhook(
-    google_sheet_id: str,
+    googleSheetId: str,
     request: Request,
 ):
     """Chat endpoint for [Twilio Incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook)"""
@@ -34,14 +34,14 @@ async def chat_twilio_webhook(
     # use the phone number or channel address that sent this message as memory thread ID
     config = {"configurable": {"thread_id": message_form.get("From")}}
 
-    # check if vector store exists for the given google_sheet_id
-    _ = get_vector_store(google_sheet_id)
+    # check if vector store exists for the given googleSheetId
+    _ = get_vector_store(googleSheetId)
 
     # invoke the agent graph with the question
     response = rag_agent.invoke(
         {
             "messages": [
-                {"role": "system", "content": f"google_sheet_id is {google_sheet_id}"},
+                {"role": "system", "content": f"googleSheetId is {googleSheetId}"},
                 {"role": "user", "content": message},
             ]
         },
