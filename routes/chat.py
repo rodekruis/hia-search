@@ -5,6 +5,7 @@ from fastapi import (
     Depends,
     Request,
     Form,
+    Response
     APIRouter,
     HTTPException,
 )
@@ -41,7 +42,7 @@ async def chat(
     print("Google Sheet ID:", google_sheet_id)
 
     resp = MessagingResponse()
-    resp.message("Hi!")
+    resp.message("The Robots are coming! Head for the hills!")
 
     # if api_key != os.environ["API_KEY"]:
     #     raise HTTPException(status_code=401, detail="Unauthorized")
@@ -66,4 +67,4 @@ async def chat(
     # )
     # answer = response["messages"][-1].content
 
-    return str(resp)
+    return Response(content=str(resp), media_type="application/xml")
