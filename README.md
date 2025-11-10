@@ -26,7 +26,7 @@ Chat endpoint for [Twilio Incoming Messaging Webhooks](https://www.twilio.com/do
 ```
 https://hia-search.azurewebsites.net/chat-twilio-webhook?googleSheetId=14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04
 ```
-The chatbot answers will be sent via message to whoever contacted the selected number. The phone number of the user will be used as thread ID (basically, for the model to remember the conversation). 
+The chatbot answers will be sent via message directly to the user. The phone number of the user will be used as thread ID (basically, for the model to remember the conversation). 
 
 ## `/search`
 
