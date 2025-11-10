@@ -16,12 +16,12 @@ router = APIRouter()
 key_query_scheme = APIKeyHeader(name="Authorization")
 
 
-@router.post("/twilio_chat")
-async def chat(
+@router.post("/chat-twilio-webhook", tags=["chat"])
+async def chat_twilio_webhook(
     google_sheet_id: str,
     request: Request,
 ):
-    """Chat endpoint for Twilio Messaging Webhook."""
+    """Chat endpoint for [Twilio Incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook)"""
     form_data = await request.form()
     message = form_data.get("Body", None)
     if message is None:

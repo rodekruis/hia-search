@@ -66,7 +66,7 @@ class SearchPayload(BaseModel):
     )
 
 
-@router.post("/search")
+@router.post("/search", tags=["search"])
 async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme)):
     """Search HIA."""
 
