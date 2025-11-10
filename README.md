@@ -20,6 +20,14 @@ If the Q&A sheet is not publicly accessible, you can pass its content to the `da
 
 🔐 This endpoint is protected with the `API_KEY_WRITE` environment-variable, to prevent unauthorized users from modifying the index.
 
+## `/chat-twilio-webhook`
+
+Chat endpoint for [Twilio Incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook). To set it up, you first need an active number in Twilio, [here's how to buy one](https://help.twilio.com/articles/223135247-How-to-Search-for-and-Buy-a-Twilio-Phone-Number-from-Console). Select that number and [configure the webhook in Twilio](https://www.twilio.com/docs/messaging/tutorials/how-to-receive-and-reply/python#configure-your-webhook-url) using this endpoint as URL, with the Google sheet ID as parameter. Example:
+```
+https://hia-search-dev.azurewebsites.net/chat-twilio-webhook?google_sheet_id=14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04
+```
+The chatbot answers will be sent via message to whoever contacted the selected number. The phone number of the user will be used as thread ID (basically, for the model to remember the conversation).
+
 ## `/search`
 
 The `/search` endpoint accepts three parameters:
