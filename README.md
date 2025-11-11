@@ -1,4 +1,4 @@
-# `hia-search`
+# `hia-search-chat`
 
 Search and chat with [HIA](https://github.com/rodekruis/helpful-information).
 
@@ -10,29 +10,38 @@ Based on [LangChain](https://github.com/langchain-ai/langchain), powered by lang
 
 Largely inspired by the projects [`knowledge-enriched-chatbot`](https://github.com/deloitte-nl/knowledge-enriched-chatbot) and [`hia-search-engine`](https://github.com/rodekruis/hia-search-engine), kudos to the authors.
 
-## API Usage
+## Usage
 
-## `/create-vector-store`
+### 1. Prepare the data
 
-The `/create-vector-store` endpoint accepts a `googleSheetId` body parameter, fetches all data from the Q&A sheet, and creates an [index](https://learn.microsoft.com/en-us/azure/search/search-what-is-an-index) in Azure AI Search. If the index already exists, its content will be updated.
+Both the chat and search fuctionalities need HIA content to be transformed into _embeddings_, i.e. numerical representations of text that capture semantic meaning in a high-dimensional vector space. Embeddings are stored in dedicated databases called _vector stores_.
+
+The first step is then to generate the embeddings of your specific HIA instance using the  `/create-vector-store` endpoint, which you can call directly from [the swagger UI](https://hia-search.azurewebsites.net).
+
+>[!NOTE]
+> Currently, each search or chat service can be linked to only one Google Sheets file, a.k.a. _region_ in the HIA terminology. If this is not clear, see [how HIA works](https://github.com/rodekruis/helpful-information?tab=readme-ov-file#how-it-works).
+
+The `/create-vector-store` endpoint accepts a `googleSheetId` body parameter, fetches all data from the Q&A sheet, and creates an [index](https://learn.microsoft.com/en-us/azure/search/search-what-is-an-index) in Azure AI Search, Azure's native vector database. If the index already exists, its content will be updated.
 
 If the Q&A sheet is not publicly accessible, you can pass its content under the `data` body parameter. The content must be a valid JSON object structured as the [test-data from the `helpful-information`-app](https://github.com/rodekruis/helpful-information/blob/main/data/test-sheet-id-1/values/Q%26As.json).
 
-🔐 This endpoint is protected with the `API_KEY_WRITE` environment-variable, to prevent unauthorized users from modifying the index.
+🔐 This endpoint is protected with the `API_KEY_WRITE` environment-variable, to prevent unauthorized users from modifying the index. You can find it on Bitwarden.
 
-## `/chat-twilio-webhook`
+### 2. Set up chat
 
-Chat endpoint for [Twilio Incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook). To set it up, you first need an active number in Twilio, [here's how to buy one](https://help.twilio.com/articles/223135247-How-to-Search-for-and-Buy-a-Twilio-Phone-Number-from-Console). Select that number and [configure the webhook in Twilio](https://www.twilio.com/docs/messaging/tutorials/how-to-receive-and-reply/python#configure-your-webhook-url) using this endpoint as URL, with a `googleSheetId` as query parameter (must be already indexed via `/create-vector-store`). Example:
+The chat functionality is based on [Twilio incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook). You need an active Twilio account and an active phone or WhatsApp number, see [how to buy one](https://help.twilio.com/articles/223135247-How-to-Search-for-and-Buy-a-Twilio-Phone-Number-from-Console).
+
+Select the active number in Twilio and [configure the webhook](https://www.twilio.com/docs/messaging/tutorials/how-to-receive-and-reply/python#configure-your-webhook-url) using the `/chat-twilio-webhook` endpoint, with a `googleSheetId` as query parameter. Example:
 ```
 https://hia-search.azurewebsites.net/chat-twilio-webhook?googleSheetId=14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04
 ```
-The chatbot answers will be sent via message directly to the user. The phone number of the user will be used as thread ID (basically, for the model to remember the conversation). 
+The answer will be sent via message directly to the user. The phone number of the user will be used as thread ID, for the chat model to remember the conversation.
 
-## `/search`
+### 3. Set up search
 
-The `/search` endpoint accepts three parameters:
+To search HIA content, use the `/search` endpoint. It accepts three parameters:
 * `query`: the search query
-* `googleSheetId`: the Google Sheet ID (must be already indexed via `/create-vector-store`)
+* `googleSheetId`: the Google Sheet ID
 * `lang`: the language of the search query; results will be translated to this language
 * `k`: the number of results to return
 
