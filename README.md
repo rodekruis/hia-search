@@ -1,4 +1,4 @@
-# `hia-search-chat`
+# `hia-search`
 
 Search and chat with [HIA](https://github.com/rodekruis/helpful-information).
 
@@ -14,12 +14,12 @@ Largely inspired by the projects [`knowledge-enriched-chatbot`](https://github.c
 
 ### 1. Prepare the data
 
-Both the chat and search fuctionalities need HIA content to be transformed into _embeddings_, i.e. numerical representations of text that capture semantic meaning in a high-dimensional vector space. Embeddings are stored in dedicated databases called _vector stores_.
+Both the chat and search service need HIA content to be transformed into _embeddings_, i.e. numerical representations of text that capture semantic meaning in a high-dimensional vector space. Embeddings are stored in dedicated databases called _vector stores_.
 
 The first step is then to generate the embeddings of your specific HIA instance using the  `/create-vector-store` endpoint, which you can call directly from [the swagger UI](https://hia-search.azurewebsites.net).
 
 >[!NOTE]
-> Currently, each search or chat service can be linked to only one Google Sheets file, a.k.a. _region_ in the HIA terminology. If this is not clear, see [how HIA works](https://github.com/rodekruis/helpful-information?tab=readme-ov-file#how-it-works).
+> Currently, each search or chat service is linked to only one Google Sheets file, a.k.a. _region_ in the HIA terminology. If it is not clear what this means, see [how HIA works](https://github.com/rodekruis/helpful-information?tab=readme-ov-file#how-it-works).
 
 The `/create-vector-store` endpoint accepts a `googleSheetId` body parameter, fetches all data from the Q&A sheet, and creates an [index](https://learn.microsoft.com/en-us/azure/search/search-what-is-an-index) in Azure AI Search, Azure's native vector database. If the index already exists, its content will be updated.
 
@@ -27,9 +27,9 @@ If the Q&A sheet is not publicly accessible, you can pass its content under the 
 
 🔐 This endpoint is protected with the `API_KEY_WRITE` environment-variable, to prevent unauthorized users from modifying the index. You can find it on Bitwarden.
 
-### 2. Set up chat
+### 2. Set up chat service
 
-The chat functionality is based on [Twilio incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook). You need an active Twilio account and an active phone or WhatsApp number, see [how to buy one](https://help.twilio.com/articles/223135247-How-to-Search-for-and-Buy-a-Twilio-Phone-Number-from-Console).
+The chat service is based on [Twilio incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook). You need an active Twilio account and an active phone or WhatsApp number, see [how to buy one](https://help.twilio.com/articles/223135247-How-to-Search-for-and-Buy-a-Twilio-Phone-Number-from-Console).
 
 Select the active number in Twilio and [configure the webhook](https://www.twilio.com/docs/messaging/tutorials/how-to-receive-and-reply/python#configure-your-webhook-url) using the `/chat-twilio-webhook` endpoint, with a `googleSheetId` as query parameter. Example:
 ```
@@ -37,7 +37,7 @@ https://hia-search.azurewebsites.net/chat-twilio-webhook?googleSheetId=14NZwDa8D
 ```
 The answer will be sent via message directly to the user. The phone number of the user will be used as thread ID, for the chat model to remember the conversation.
 
-### 3. Set up search
+### 3. Set up search service
 
 To search HIA content, use the `/search` endpoint. It accepts three parameters:
 * `query`: the search query
