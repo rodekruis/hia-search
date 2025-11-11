@@ -33,7 +33,7 @@ class VectorStorePayload(BaseModel):
     )
 
 
-@router.post("/create-vector-store")
+@router.post("/create-vector-store", tags=["data"])
 async def create_vector_store(
     payload: VectorStorePayload, api_key: str = Depends(key_query_scheme)
 ):
@@ -80,7 +80,7 @@ async def create_vector_store(
     )
 
 
-@router.delete("/delete-vector-store")
+@router.delete("/delete-vector-store", tags=["data"])
 async def delete_vector_store(
     payload: VectorStorePayload, api_key: str = Depends(key_query_scheme)
 ):
