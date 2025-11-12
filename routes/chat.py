@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Annotated
 from fastapi import (
     Request,
     Response,
@@ -27,12 +26,8 @@ async def chat_twilio_webhook(
     if message is None:
         return Response(content="No message provided", status_code=400)
 
-    # parse the incoming message from Twilio
-    message_form = await request.form()
-    message = message_form.get("Body")
-
     # use the phone number or channel address that sent this message as memory thread ID
-    config = {"configurable": {"thread_id": message_form.get("From")}}
+    config = {"configurable": {"thread_id": form_data.get("From")}}
 
     # check if vector store exists for the given googleSheetId
     _ = get_vector_store(googleSheetId)

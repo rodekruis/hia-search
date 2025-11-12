@@ -9,7 +9,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
-from utils.vector_store import get_vector_store, create_vector_store_index
+from utils.vector_store import get_vector_store
 from utils.constants import DocumentMetadata
 import json
 from utils.logger import logger
