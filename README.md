@@ -12,20 +12,11 @@ Largely inspired by the projects [`knowledge-enriched-chatbot`](https://github.c
 
 ## Usage
 
-### 1. Prepare the data
+### 1. Set up HIA and the search service
 
-Both the chat and search services need HIA content to be transformed into _embeddings_, i.e. numerical representations of text that capture semantic meaning in a high-dimensional vector space. Embeddings are stored in dedicated databases called _vector stores_.
+[Set up a HIA instance](https://github.com/rodekruis/helpful-information/blob/main/docs/Guide-How_to_set_up_an_instance.md) and populate its content. The search service is enabled by default, as long as the `SEARCH_API_KEY` is added as a secret to the repository; you can find it in Bitwarden.
 
-The first step is then to generate and store the embeddings of your specific HIA instance using the  `/create-vector-store` endpoint, which you can call directly from [the swagger UI](https://hia-search.azurewebsites.net). You will need to authenticate with `API_KEY_WRITE`, see Bitwarden.
-
->[!NOTE]
-> Currently, each search or chat service is linked to only one Google Sheets file, a.k.a. _region_ in the HIA terminology. If it is not clear what this means, see [how HIA works](https://github.com/rodekruis/helpful-information?tab=readme-ov-file#how-it-works).
-
-The `/create-vector-store` endpoint accepts a `googleSheetId` body parameter, fetches all data from the Q&A sheet, and creates an [index](https://learn.microsoft.com/en-us/azure/search/search-what-is-an-index) in Azure AI Search, Azure's native vector database. If the index already exists, its content will be updated.
-
-If the Q&A sheet is not publicly accessible, you can pass its content under the `data` body parameter. The content must be a valid JSON object structured as the [test-data from the `helpful-information`-app](https://github.com/rodekruis/helpful-information/blob/main/data/test-sheet-id-1/values/Q%26As.json).
-
-### 2. Set up chat service
+### 2. Set up the chat service
 
 The chat service is based on [Twilio incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook). You need an active Twilio account and an active phone or WhatsApp number, see [how to buy one](https://help.twilio.com/articles/223135247-How-to-Search-for-and-Buy-a-Twilio-Phone-Number-from-Console).
 
@@ -35,9 +26,30 @@ https://hia-search.azurewebsites.net/chat-twilio-webhook?googleSheetId=14NZwDa8D
 ```
 The answer will be sent via message directly to the user. The phone number of the user will be used as thread ID, for the chat model to remember the conversation.
 
-### 3. Set up search service
+### 3. Keep your data up to date
 
-To search HIA content, use the `/search` endpoint. It accepts three parameters:
+Both the chat and search services need HIA content to be transformed into _embeddings_, i.e. numerical representations of text that capture semantic meaning in a high-dimensional vector space. Embeddings are stored in dedicated databases called _vector stores_. When searching or chatting with HIA, the user query 
+
+Generating and storing the embeddings of your specific HIA instance is done automatically the first time you call the chat or search endpoints, if the HIA Google Sheet file is publicly accessible. If the Google Sheet file is not publicly accessible or you need to update it, you can use the  `/create-vector-store` endpoint, which you can call directly from [the swagger UI](https://hia-search.azurewebsites.net). You will need to authenticate with `API_KEY_WRITE`, which you find in Bitwarden. See API reference below.
+
+>[!NOTE]
+> Currently, each search or chat service is linked to only one Google Sheets file, a.k.a. _region_ in the HIA terminology. If it is not clear what this means, see [how HIA works](https://github.com/rodekruis/helpful-information?tab=readme-ov-file#how-it-works).
+
+## API Reference
+
+If not here, see the [`/docs`](https://hia-search.azurewebsites.net/docs).
+
+### `/create-vector-store`
+
+The `/create-vector-store` endpoint accepts a `googleSheetId` body parameter, fetches all data from the Q&A sheet, and creates an [index](https://learn.microsoft.com/en-us/azure/search/search-what-is-an-index) in Azure AI Search, Azure's native vector database. If the index already exists, its content will be updated.
+
+If the Q&A sheet is not publicly accessible, you can pass its content under the `data` body parameter. The content must be a valid JSON object structured as the [test-data from the `helpful-information`-app](https://github.com/rodekruis/helpful-information/blob/main/data/test-sheet-id-1/values/Q%26As.json).
+
+🔐 This endpoint is protected with the API_KEY_WRITE environment-variable, to prevent unauthorized users from modifying the index.
+
+### `/search`
+
+The `/search` endpoint accepts three parameters:
 * `query`: the search query
 * `googleSheetId`: the Google Sheet ID
 * `lang`: the language of the search query; results will be translated to this language
@@ -70,9 +82,6 @@ and returns a list of relevant questions and answers, in this format:
  ```
 
  This endpoint is protected with the `API_KEY` environment variable. As this key will be stored by the client-application in plain-text, visible in the browser, it should be considered public. Its main purpose is to prevent abuse of the API by unauthorized users (with possible future measures against it).
-
-For the rest, see [the `/docs`](https://hia-search.azurewebsites.net/docs).  
-Or locally at: <http://localhost:8000/docs>.
 
 ## Configuration
 
