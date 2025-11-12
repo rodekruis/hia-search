@@ -9,7 +9,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
-from utils.vector_store import get_vector_store
+from utils.vector_store import get_vector_store, create_vector_store_index
 from utils.constants import DocumentMetadata
 import json
 from utils.logger import logger
@@ -75,8 +75,6 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
 
     # load vector store
     vector_store = get_vector_store(payload.googleSheetId)
-
-    logger.info(f"Search query: '{payload.query}'")
 
     # translate if necessary
     if payload.lang != "en":

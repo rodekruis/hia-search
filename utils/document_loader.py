@@ -1,4 +1,6 @@
 from typing import List
+
+import urllib
 from langchain_core.documents import Document
 import pandas as pd
 from utils.constants import DocumentMetadata
@@ -45,7 +47,14 @@ class DocumentLoader:
             logger.info(f"Loading {self.document_id} from Google Sheet.")
             sheet_name = "Q%26As"
             url = f"https://docs.google.com/spreadsheets/d/{self.document_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
-            df = pd.read_csv(url)
+            try:
+                df = pd.read_csv(url)
+            except urllib.error.HTTPError as e:
+                raise HTTPException(
+                    status_code=e.code,
+                    detail=f"Could not load Google Sheet with ID {self.document_id}: {e}",
+                )
+
         elif self.document_type.lower() == "json":
             logger.info("Loading from JSON.")
             if not self.document_data:
