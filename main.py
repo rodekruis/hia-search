@@ -4,11 +4,8 @@ from fastapi import (
     FastAPI,
 )
 from fastapi.responses import RedirectResponse, JSONResponse
-from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
-from azure.search.documents.indexes import SearchIndexClient
-from azure.core.credentials import AzureKeyCredential
-from routes import search, load
+from routes import search, data, chat
 import os
 import logging
 import sys
@@ -35,21 +32,41 @@ else:
     port = os.environ["PORT"]
 
 description = """
-Search engine for [HIA](https://github.com/rodekruis/helpful-information).
+Search and chat with [HIA](https://github.com/rodekruis/helpful-information).
 
 Built with love by [NLRC 510](https://www.510.global/). See
 [the project on GitHub](https://github.com/rodekruis/hia-search) or [contact us](mailto:support@510.global).
 """
 
+tags_metadata = [
+    {
+        "name": "data",
+        "description": "Create, update or delete _vector stores_, i.e. databases for embeddings.",
+    },
+    {
+        "name": "search",
+        "description": "Search HIA.",
+    },
+    {
+        "name": "chat",
+        "description": "Chat with HIA.",
+    },
+    {
+        "name": "models",
+        "description": "Get information on the AI models used.",
+    },
+]
+
 # initialize FastAPI
 app = FastAPI(
     title="hia-search",
     description=description,
-    version="0.0.1",
+    version="0.0.2",
     license_info={
         "name": "AGPL-3.0 license",
         "url": "https://www.gnu.org/licenses/agpl-3.0.en.html",
     },
+    openapi_tags=tags_metadata,
 )
 
 app.add_middleware(
@@ -69,17 +86,19 @@ async def docs_redirect():
 
 # Include routes
 app.include_router(search.router)
-app.include_router(load.router)
+app.include_router(data.router)
+app.include_router(chat.router)
 
 
-@app.get("/get-models")
+@app.get("/get-models", tags=["models"])
 async def get_models():
-    """Get embedding models used in vector search."""
+    """Get information on the AI models used."""
     return JSONResponse(
         status_code=200,
         content={
             "provider": "OpenAI",
-            "model": os.environ["MODEL_EMBEDDINGS"],
+            "model embeddings": os.environ["MODEL_EMBEDDINGS"],
+            "model chat": os.environ["MODEL_CHAT"],
         },
     )
 

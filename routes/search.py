@@ -9,9 +9,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
-from azure.search.documents.indexes import SearchIndexClient
-from azure.core.credentials import AzureKeyCredential
-from utils.vector_store import VectorStore, googleid_to_vectorstoreid
+from utils.vector_store import get_vector_store
 from utils.constants import DocumentMetadata
 import json
 from utils.logger import logger
@@ -25,23 +23,6 @@ dm = DocumentMetadata()
 router = APIRouter()
 
 key_query_scheme = APIKeyHeader(name="Authorization")
-
-azure_search_index_client = SearchIndexClient(
-    os.environ["VECTOR_STORE_ADDRESS"],
-    AzureKeyCredential(os.environ["VECTOR_STORE_PASSWORD"]),
-)
-
-# initialize vector stores
-vector_dbs = {}
-for index in azure_search_index_client.list_indexes():
-    vector_dbs[index.name] = VectorStore(
-        store_path=os.environ["VECTOR_STORE_ADDRESS"],
-        store_service="azuresearch",
-        store_password=os.environ["VECTOR_STORE_PASSWORD"],
-        embedding_source="OpenAI",
-        embedding_model=os.environ["MODEL_EMBEDDINGS"],
-        store_id=index.name,
-    )
 
 
 def get_score_google_index(docs_and_scores, google_index: str) -> float:
@@ -85,7 +66,7 @@ class SearchPayload(BaseModel):
     )
 
 
-@router.post("/search")
+@router.post("/search", tags=["search"])
 async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme)):
     """Search HIA."""
 
@@ -93,25 +74,7 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     # load vector store
-    vector_store_id = googleid_to_vectorstoreid(payload.googleSheetId)
-    if vector_store_id not in vector_dbs:
-        # try again in case the vector store was just added
-        vector_store_ids = [i.name for i in azure_search_index_client.list_indexes()]
-        if vector_store_id in vector_store_ids:
-            vector_dbs[vector_store_id] = VectorStore(
-                store_path=os.environ["VECTOR_STORE_ADDRESS"],
-                store_service="azuresearch",
-                store_password=os.environ["VECTOR_STORE_PASSWORD"],
-                embedding_source="OpenAI",
-                embedding_model=os.environ["MODEL_EMBEDDINGS"],
-                store_id=vector_store_id,
-            )
-        else:
-            raise HTTPException(
-                status_code=400, detail=f"Vector store {vector_store_id} not found."
-            )
-
-    logger.info(f"Search query: '{payload.query}'")
+    vector_store = get_vector_store(payload.googleSheetId)
 
     # translate if necessary
     if payload.lang != "en":
@@ -123,7 +86,7 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
         )
 
     # retrieve documents
-    docs_and_scores = vector_dbs[vector_store_id].similarity_search_with_score(
+    docs_and_scores = vector_store.similarity_search_with_score(
         query=payload.query, k=payload.k
     )
 
@@ -131,7 +94,7 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
     df = pd.DataFrame.from_records(
         [
             json.loads(doc["metadata"], strict=False)
-            for doc in vector_dbs[vector_store_id].get_documents()
+            for doc in vector_store.get_documents()
         ]
     )  # load all documents from vector store
     results = []

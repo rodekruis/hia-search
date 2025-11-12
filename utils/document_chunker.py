@@ -1,10 +1,9 @@
 import copy
-from pathlib import Path
 from typing import List
 import re
 
-from langchain.schema import Document
-from langchain.text_splitter import SpacyTextSplitter
+from langchain_core.documents import Document
+from langchain_text_splitters import SpacyTextSplitter
 from utils.logger import logger
 from utils.constants import DocumentMetadata
 

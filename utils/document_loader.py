@@ -1,5 +1,7 @@
 from typing import List
-from langchain.schema import Document
+
+import urllib
+from langchain_core.documents import Document
 import pandas as pd
 from utils.constants import DocumentMetadata
 from utils.logger import logger
@@ -45,7 +47,14 @@ class DocumentLoader:
             logger.info(f"Loading {self.document_id} from Google Sheet.")
             sheet_name = "Q%26As"
             url = f"https://docs.google.com/spreadsheets/d/{self.document_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
-            df = pd.read_csv(url)
+            try:
+                df = pd.read_csv(url)
+            except urllib.error.HTTPError as e:
+                raise HTTPException(
+                    status_code=e.code,
+                    detail=f"Could not load Google Sheet with ID {self.document_id}: {e}",
+                )
+
         elif self.document_type.lower() == "json":
             logger.info("Loading from JSON.")
             if not self.document_data:
@@ -80,7 +89,12 @@ class DocumentLoader:
         df = df[df[dm.QUESTION].astype(str).str.strip() != ""]
         df = df[df[dm.ANSWER].astype(str).str.strip() != ""]
         # Filter out what's hidden
-        df = df[~df["visible"].astype(str).str.lower().isin(["hide", "hidden", "no", "0", "-"])]
+        df = df[
+            ~df["visible"]
+            .astype(str)
+            .str.lower()
+            .isin(["hide", "hidden", "no", "0", "-"])
+        ]
         return df
 
     def _load(self):

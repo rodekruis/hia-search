@@ -20,9 +20,12 @@ fastapi = "*"
 langchain = "*"
 langchain-community = "*"
 langchain-openai = "*"
+langgraph = "*"
 orjson = "*"
 pandas = "*"
+python-multipart = "*"
 spacy = "*"
+twilio = "*"
 Unidecode = "*"
 
 [build-system]

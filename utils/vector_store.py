@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from chromadb import PersistentClient
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_openai import AzureOpenAIEmbeddings
-from langchain.schema import Document
+from langchain_core.documents import Document
 from langchain_community.vectorstores import Chroma
 from langchain_community.vectorstores.azuresearch import AzureSearch
 from azure.core.credentials import AzureKeyCredential
@@ -28,6 +28,9 @@ from azure.search.documents.indexes.models import (
 )
 from utils.logger import logger
 from utils.constants import DocumentMetadata
+from utils.document_loader import DocumentLoader
+from utils.document_chunker import DocumentChunker
+import os
 
 DEFAULT_HUGGING_FACE_MODEL = "sentence-transformers/all-mpnet-base-v2"
 
@@ -269,8 +272,74 @@ class VectorStore:
             docs = [d for d in self.client.search(search_text="*")]
         return docs
 
+    def similarity_search(self, query: str, k: int) -> List[Document]:
+        """Search for similar documents in the vector store"""
+        return self.langchain_client.similarity_search(query=query, k=k)
+
     def similarity_search_with_score(
         self, query: str, k: int
     ) -> List[(Document, float)]:
-        """Search for similar documents in the vector store"""
+        """Search for similar documents in the vector store and return with scores"""
         return self.langchain_client.similarity_search_with_score(query=query, k=k)
+
+
+def create_vector_store_index(
+    document_type: str, document_id: str, document_data: dict
+):
+    """Create vector store index in Azure Search and return it."""
+    # load documents from Google Sheet
+    doc_loader = DocumentLoader(
+        document_type=document_type,
+        document_id=document_id,
+        document_data=document_data,
+    )
+    docs = doc_loader.load()
+
+    if len(docs) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No documents found, cannot create vector store for document_id {document_id}.",
+        )
+
+    document_chunker = DocumentChunker(
+        chunking_strategy="TokenizedSentenceSplitting",
+        kwargs={"chunk_overlap": 20, "chunk_size": 256},
+    )
+    docs = document_chunker.split_documents(documents=docs)
+
+    # add documents to vector store
+    vector_store = VectorStore(
+        store_path=os.environ["VECTOR_STORE_ADDRESS"],
+        store_service="azuresearch",
+        store_password=os.environ["VECTOR_STORE_PASSWORD"],
+        embedding_source="OpenAI",
+        embedding_model=os.environ["MODEL_EMBEDDINGS"],
+        store_id=googleid_to_vectorstoreid(document_id),
+    )
+    n_docs = vector_store.add_documents(docs)
+    logger.info(
+        f"Created vector store index {vector_store.store_id} with {n_docs} documents."
+    )
+    return vector_store
+
+
+def get_vector_store(google_sheet_id: str) -> VectorStore:
+    """Get vector store from Azure Search."""
+    vector_store_id = googleid_to_vectorstoreid(google_sheet_id)
+    vector_store = VectorStore(
+        store_path=os.environ["VECTOR_STORE_ADDRESS"],
+        store_service="azuresearch",
+        store_password=os.environ["VECTOR_STORE_PASSWORD"],
+        embedding_source="OpenAI",
+        embedding_model=os.environ["MODEL_EMBEDDINGS"],
+        store_id=vector_store_id,
+    )
+    # if index is not found, create it
+    if vector_store.client.get_document_count() == 0:
+        logger.info(f"Vector store {vector_store_id} not found. Creating new one.")
+        vector_store = create_vector_store_index(
+            document_type="googlesheet",
+            document_id=google_sheet_id,
+            document_data={},
+        )
+    return vector_store
