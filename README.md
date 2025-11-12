@@ -12,9 +12,33 @@ Largely inspired by the projects [`knowledge-enriched-chatbot`](https://github.c
 
 ## Usage
 
-### 1. Set up HIA and the search service
+### 1. Set up HIA
 
-[Set up a HIA instance](https://github.com/rodekruis/helpful-information/blob/main/docs/Guide-How_to_set_up_an_instance.md) and populate its content. The search service is enabled by default, as long as the `SEARCH_API_KEY` is added as a secret to the repository; you can find it in Bitwarden.
+[Set up a HIA instance](https://github.com/rodekruis/helpful-information/blob/main/docs/Guide-How_to_set_up_an_instance.md) and populate its content.
+
+### 2. Set up the search service
+
+  - Find the item called `HIA Search API-key(s) [production]` in Bitwarden and copy the value of `API_KEY`
+  - Go to the HIA repository's "**Settings**" > "**Secret and variables**" > "**Actions**" > "**New repository secret**"
+  - Name the secret: `SEARCH_API_KEY`and insert the API Key as value
+  - In the HIA repository, go to the file: `.github/workflows/deploy-github-pages.yml` and click "**Edit this file**" (pencil icon)
+  - Under `jobs` > `deploy` > `steps` > `Build` > `env` add the two variables `SEARCH_API` and `SEARCH_API_KEY` as follows
+
+  ```yaml
+        - name: Build
+        working-directory: 'helpful-information'
+        # NOTE: When the instance will be run on a custom (sub-)domain, remove the `--base-href`-flag+value.
+        run: 'npm run build:production -- --output-path=../www --base-href=/${GITHUB_REPOSITORY#*/}/'
+        env:
+          # See all variables: https://github.com/rodekruis/helpful-information/blob/main/.env.example
+          NG_PRODUCTION: 'true'
+          GOOGLE_SHEETS_API_KEY: ${{ secrets.GOOGLE_SHEETS_API_KEY }}
+          GOOGLE_SHEETS_API_URL: 'https://sheets.googleapis.com/v4/spreadsheets'
+          SEARCH_API: 'https://hia-search.azurewebsites.net/search'
+          SEARCH_API_KEY: ${{ secrets.SEARCH_API_KEY }}
+  ```
+  - Redeploy HIA by triggering the deployment workflow: `Actions` > `Deploy to GitHub Pages` > `Run workflow`
+  
 
 ### 2. Set up the chat service
 
