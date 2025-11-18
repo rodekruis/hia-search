@@ -8,7 +8,6 @@ from langchain_core.messages import SystemMessage
 from langchain_core.tools import tool
 from langgraph.graph import END
 from langgraph.prebuilt import ToolNode, tools_condition
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
 from pydantic import BaseModel, Field
 import os
