@@ -8,7 +8,7 @@ Synopsis: a [dockerized](https://www.docker.com/) [Python](https://www.python.or
 
 Based on [LangChain](https://github.com/langchain-ai/langchain), powered by language models. Uses [Poetry](https://python-poetry.org/) for dependency management and [Azure AI Search](https://learn.microsoft.com/en-us/azure/search/search-what-is-azure-search) for indexing and searching.
 
-Largely inspired by the projects [`knowledge-enriched-chatbot`](https://github.com/deloitte-nl/knowledge-enriched-chatbot) and [`hia-search-engine`](https://github.com/rodekruis/hia-search-engine), kudos to the authors.
+Inspired by [`knowledge-enriched-chatbot`](https://github.com/deloitte-nl/knowledge-enriched-chatbot) and [`HIA-search-engine`](https://github.com/PetrovViktor/HIA-search-engine), kudos to the authors.
 
 ## Usage
 

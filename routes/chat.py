@@ -7,6 +7,7 @@ from fastapi import (
 )
 from fastapi.security import APIKeyHeader
 from twilio.twiml.messaging_response import MessagingResponse
+from pydantic import BaseModel, Field
 from utils.vector_store import get_vector_store
 from agents.rag_agent import rag_agent
 
@@ -46,3 +47,40 @@ async def chat_twilio_webhook(
     resp = MessagingResponse()
     resp.message(response["messages"][-1].content)
     return Response(content=str(resp), media_type="application/xml")
+
+
+class MessagePayload(BaseModel):
+    message: str = Field(
+        ...,
+        description="""
+        Text of the message.""",
+    )
+
+
+@router.post("/chat-dummy", tags=["chat"])
+async def chat_dummy(
+    payload: MessagePayload,
+    request: Request,
+    googleSheetId: str = "14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04",
+):
+    """Dummy chat endpoint for testing"""
+
+    # use client host as memory thread ID
+    client_host = request.client.host
+    config = {"configurable": {"thread_id": client_host}}
+
+    # check if vector store exists for the given googleSheetId
+    _ = get_vector_store(googleSheetId)
+
+    # invoke the agent graph with the question
+    response = rag_agent.invoke(
+        {
+            "messages": [
+                {"role": "system", "content": f"googleSheetId is {googleSheetId}"},
+                {"role": "user", "content": payload.message},
+            ]
+        },
+        config=config,
+    )
+
+    return {"response": response["messages"][-1].content}

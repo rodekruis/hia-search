@@ -9,6 +9,7 @@ from langchain_core.tools import tool
 from langgraph.graph import END
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from pydantic import BaseModel, Field
 import os
 from utils.vector_store import get_vector_store
@@ -95,6 +96,10 @@ def generate(state: MessagesState):
 
 
 # Define and build the agent graph
+DB_URI = f'postgresql://{os.environ["CHECKPOINT_DB_USER"]}:{os.environ["CHECKPOINT_DB_PASSWORD"]}@{os.environ["CHECKPOINT_DB_HOST"]}'
+_checkpointer_context = PostgresSaver.from_conn_string(DB_URI)
+checkpointer = _checkpointer_context.__enter__()
+
 tools = ToolNode([retrieve])
 graph_builder = StateGraph(MessagesState)
 graph_builder.add_node(query_or_respond)
@@ -110,5 +115,4 @@ graph_builder.add_conditional_edges(
 graph_builder.add_edge("tools", "generate")
 graph_builder.add_edge("generate", END)
 
-memory = InMemorySaver()  # in-memory checkpointer
-rag_agent = graph_builder.compile(checkpointer=memory)
+rag_agent = graph_builder.compile(checkpointer=checkpointer)
