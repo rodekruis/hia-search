@@ -1,6 +1,11 @@
 # python base image in the container from Docker Hub
 FROM python:3.12-slim
 
+# install libpq for postgresql
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev
+
 # copy files to the /app folder in the container
 ADD routes /app/routes
 ADD utils /app/utils
@@ -25,4 +30,5 @@ ENV PORT=8000
 EXPOSE 8000
 
 # execute the command python main.py (in the WORKDIR) to start the app
+
 CMD ["python", "main.py"]
