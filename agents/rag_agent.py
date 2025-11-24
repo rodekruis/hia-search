@@ -12,6 +12,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from pydantic import BaseModel, Field
 import os
 from utils.vector_store import get_vector_store
+from utils.groundedness import detect_groundness
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -24,7 +25,7 @@ class ContextSchema:
 
 # Initialize the LLM client
 llm = AzureChatOpenAI(
-    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+    azure_endpoint=os.environ["OPENAI_ENDPOINT"],
     azure_deployment=os.environ["MODEL_CHAT"],
     openai_api_version=os.environ["OPENAI_API_VERSION"],
     temperature=0.2,
@@ -43,7 +44,7 @@ class RetrieveInput(BaseModel):
 def retrieve(query: str, googleSheetId: str) -> tuple[str, List[Document]]:
     """Retrieve information related to a query."""
     vector_store = get_vector_store(googleSheetId)
-    retrieved_docs = vector_store.similarity_search(query, k=10)
+    retrieved_docs = vector_store.similarity_search(query, k=5)
     serialized = "\n\n".join(f"Document: {doc.page_content}" for doc in retrieved_docs)
     return serialized, retrieved_docs
 
@@ -57,7 +58,8 @@ with open("config/rag_agent_prompt.txt", "r") as f:
 def query_or_respond(state: MessagesState) -> dict:
     """Generate tool call for retrieval or respond."""
     llm_with_tools = llm.bind_tools([retrieve])
-    prompt = [SystemMessage(f"{rag_agent_prompt}")] + state["messages"]
+    prompt = [SystemMessage(f"{rag_agent_prompt}")] + state["messages"][-5:]
+
     response = llm_with_tools.invoke(prompt)
     # MessagesState appends messages to state instead of overwriting
     return {"messages": [response]}
@@ -74,8 +76,8 @@ def generate(state: MessagesState):
             recent_tool_messages.append(message)
         else:
             break
-    tool_messages = recent_tool_messages[::-1]
-    docs_content = "\n\n".join(doc.content for doc in tool_messages)
+    tool_messages = [doc.content for doc in recent_tool_messages[::-1]]
+    docs_content = "\n\n".join(tool_messages)
 
     # Format into prompt
     system_message_content = f"{rag_agent_prompt}.\n\n{docs_content}"
@@ -87,10 +89,18 @@ def generate(state: MessagesState):
         if message.type in ("human", "system")
         or (message.type == "ai" and not message.tool_calls)
     ]
-    prompt = [SystemMessage(system_message_content)] + conversation_messages
+    prompt = [SystemMessage(system_message_content)] + conversation_messages[-5:]
 
     # Run
     response = llm.invoke(prompt)
+
+    # Check groundedness
+    user_query = conversation_messages[-1].content
+    docs = docs_content.split("\n\nDocument: ")
+    response.content = detect_groundness(
+        content_text=response.content, grounding_sources=docs, query=user_query
+    )
+
     return {"messages": [response]}
 
 

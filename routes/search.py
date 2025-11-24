@@ -1,11 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
-from fastapi import (
-    Depends,
-    APIRouter,
-    HTTPException,
-)
+from fastapi import Depends, APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
@@ -81,9 +77,10 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
         payload.query = translate(
             from_lang=payload.lang, to_lang="en", text=payload.query
         )
-        logger.info(
-            f"Search query translated from {payload.lang} to en: '{payload.query}'"
-        )
+
+    # log query
+    extra_logs = {"googleSheetId": payload.googleSheetId, "lang": payload.lang}
+    logger.info(f"query: {payload.query}", extra=extra_logs)
 
     # retrieve documents
     docs_and_scores = vector_store.similarity_search_with_score(

@@ -86,6 +86,7 @@ class VectorStore:
         """
         if self.embedding_source.lower() == "openai":
             return AzureOpenAIEmbeddings(
+                azure_endpoint=os.environ["OPENAI_ENDPOINT"],
                 deployment=self.embedding_model,
                 chunk_size=1,
             )
