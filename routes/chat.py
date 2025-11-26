@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from fastapi import (
-    Request,
-    Response,
-    APIRouter,
-)
+from fastapi import Depends, Request, Response, APIRouter, HTTPException
 from fastapi.security import APIKeyHeader
 from twilio.twiml.messaging_response import MessagingResponse
+from pydantic import BaseModel, Field
 from utils.vector_store import get_vector_store
 from agents.rag_agent import rag_agent
+from utils.logger import logger
+import time
+import os
+import hashlib
 
 router = APIRouter()
 
@@ -26,8 +27,9 @@ async def chat_twilio_webhook(
     if message is None:
         return Response(content="No message provided", status_code=400)
 
-    # use the phone number or channel address that sent this message as memory thread ID
-    config = {"configurable": {"thread_id": form_data.get("From")}}
+    # use the hashed phone number or channel address that sent this message as memory thread ID
+    threadId = hashlib.sha256(form_data.get("From").encode()).hexdigest()
+    config = {"configurable": {"thread_id": threadId}}
 
     # check if vector store exists for the given googleSheetId
     _ = get_vector_store(googleSheetId)
@@ -43,6 +45,56 @@ async def chat_twilio_webhook(
         config=config,
     )
 
+    # log user message and assistant response
+    extra_logs = {"googleSheetId": googleSheetId, "threadId": threadId}
+    response_text = response["messages"][-1].content
+    logger.info(f"user: {message}, assistant: {response_text}", extra=extra_logs)
+
+    # return TwiML response
     resp = MessagingResponse()
-    resp.message(response["messages"][-1].content)
+    resp.message(response_text)
     return Response(content=str(resp), media_type="application/xml")
+
+
+class MessagePayload(BaseModel):
+    message: str = Field(
+        ...,
+        description="""
+        Text of the message.""",
+    )
+
+
+@router.post("/chat-dummy", tags=["chat"])
+async def chat_dummy(
+    payload: MessagePayload,
+    request: Request,
+    api_key: str = Depends(key_query_scheme),
+    googleSheetId: str = "14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04",
+):
+    """Dummy chat endpoint for testing"""
+
+    if api_key != os.environ["API_KEY"]:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    start_time = time.time()
+
+    # use client host as memory thread ID
+    client_host = request.client.host
+    config = {"configurable": {"thread_id": client_host}}
+
+    # check if vector store exists for the given googleSheetId
+    _ = get_vector_store(googleSheetId)
+
+    # invoke the agent graph with the question
+    response = rag_agent.invoke(
+        {
+            "messages": [
+                {"role": "system", "content": f"googleSheetId is {googleSheetId}"},
+                {"role": "user", "content": payload.message},
+            ]
+        },
+        config=config,
+    )
+    print("--- %s seconds ---" % (time.time() - start_time))
+
+    return {"response": response["messages"][-1].content}
