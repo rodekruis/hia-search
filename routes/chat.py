@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import Depends, Request, Response, APIRouter, HTTPException
 from fastapi.security import APIKeyHeader
 from twilio.twiml.messaging_response import MessagingResponse
+from langchain.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
 from utils.vector_store import get_vector_store
 from agents.rag_agent import rag_agent
@@ -32,14 +33,14 @@ async def chat_twilio_webhook(
     config = {"configurable": {"thread_id": threadId}}
 
     # check if vector store exists for the given googleSheetId
-    _ = get_vector_store(googleSheetId)
+    _ = get_vector_store(googleSheetId, check_if_exists=True)
 
     # invoke the agent graph with the question
     response = rag_agent.invoke(
         {
             "messages": [
-                {"role": "system", "content": f"googleSheetId is {googleSheetId}"},
-                {"role": "user", "content": message},
+                SystemMessage(f"googleSheetId is {googleSheetId}"),
+                HumanMessage(message),
             ]
         },
         config=config,
@@ -78,19 +79,19 @@ async def chat_dummy(
 
     start_time = time.time()
 
-    # use client host as memory thread ID
-    client_host = request.client.host
-    config = {"configurable": {"thread_id": client_host}}
+    # use hashed client host as memory thread ID
+    threadId = hashlib.sha256(str(request.client.host).encode()).hexdigest()
+    config = {"configurable": {"thread_id": threadId}}
 
     # check if vector store exists for the given googleSheetId
-    _ = get_vector_store(googleSheetId)
+    _ = get_vector_store(googleSheetId, check_if_exists=True)
 
     # invoke the agent graph with the question
     response = rag_agent.invoke(
         {
             "messages": [
-                {"role": "system", "content": f"googleSheetId is {googleSheetId}"},
-                {"role": "user", "content": payload.message},
+                SystemMessage(f"googleSheetId is {googleSheetId}"),
+                HumanMessage(payload.message),
             ]
         },
         config=config,

@@ -4,11 +4,9 @@ import copy
 from pathlib import Path
 from typing import List
 from fastapi import HTTPException
-from chromadb import PersistentClient
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_openai import AzureOpenAIEmbeddings
 from langchain_core.documents import Document
-from langchain_community.vectorstores import Chroma
 from langchain_community.vectorstores.azuresearch import AzureSearch
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
@@ -158,9 +156,7 @@ class VectorStore:
 
     def _set_client(self):
         """Sets the vector store client"""
-        if self.store_service.lower() == "chroma":
-            return PersistentClient(db_path=Path(self.store_path))
-        elif self.store_service.lower() == "azuresearch":
+        if self.store_service.lower() == "azuresearch":
             return SearchClient(
                 self.store_path,
                 index_name=self.store_id,
@@ -169,7 +165,7 @@ class VectorStore:
         else:
             raise HTTPException(
                 status_code=500,
-                detail=f"Vectore store {self.store_service} not available. Only 'chroma' or 'azuresearch' are currently available.",
+                detail=f"Vectore store {self.store_service} not available. Only 'azuresearch' are currently available.",
             )
 
     def _add_embedding_model_to_metadata(self, metadatas: list) -> List[dict]:
@@ -185,15 +181,7 @@ class VectorStore:
 
     def _set_langchain_client(self):
         """Set the vector store langchain client"""
-        if self.store_service.lower() == "chroma":
-            logger.info("Initializing ChromaDB")
-            _ = self.client.get_or_create_collection(self.store_id)
-            return Chroma(
-                store_id=self.store_id,
-                embedding_function=self.embedder,
-                client=self.client,
-            )
-        elif self.store_service.lower() == "azuresearch":
+        if self.store_service.lower() == "azuresearch":
             return AzureSearch(
                 azure_search_endpoint=self.store_path,
                 azure_search_key=self.store_password,
@@ -203,7 +191,7 @@ class VectorStore:
         else:
             raise HTTPException(
                 status_code=500,
-                detail=f"Vectore store {self.store_service} not available. Only 'chroma' or 'azuresearch' are currently available.",
+                detail=f"Vectore store {self.store_service} not available. Only 'azuresearch' are currently available.",
             )
 
     def add_documents(self, chunked_documents: List[Document]) -> int:
@@ -215,21 +203,14 @@ class VectorStore:
         n_docs_added = 0
         if len(chunked_documents) > 0:
             n_docs_in_collection = 0
-            if self.store_service.lower() == "chroma":
-                n_docs_in_collection = self.client.get_or_create_collection(
-                    self.store_id
-                ).count()
-            elif self.store_service.lower() == "azuresearch":
+            if self.store_service.lower() == "azuresearch":
                 n_docs_in_collection = self.client.get_document_count()
 
             if n_docs_in_collection > 0:
                 logger.info(
                     f"Vector store already contains {n_docs_in_collection} documents. Replacing everything."
                 )
-                if self.store_service.lower() == "chroma":
-                    self.client.delete_collection(self.store_id)
-                    _ = self.client.get_or_create_collection(self.store_id)
-                elif self.store_service.lower() == "azuresearch":
+                if self.store_service.lower() == "azuresearch":
                     index_client = SearchIndexClient(
                         self.store_path, AzureKeyCredential(self.store_password)
                     )
@@ -257,19 +238,13 @@ class VectorStore:
     def count_documents(self) -> int:
         """Count the number of documents in the vector store"""
         n_docs_in_collection = None
-        if self.store_service.lower() == "chroma":
-            n_docs_in_collection = self.client.get_or_create_collection(
-                self.store_id
-            ).count()
-        elif self.store_service.lower() == "azuresearch":
+        if self.store_service.lower() == "azuresearch":
             n_docs_in_collection = self.client.get_document_count()
         return n_docs_in_collection
 
     def get_documents(self) -> List[Document]:
         """Get all documents from the vector store"""
-        if self.store_service.lower() == "chroma":
-            docs = self.client.get_all_documents()
-        elif self.store_service.lower() == "azuresearch":
+        if self.store_service.lower() == "azuresearch":
             docs = [d for d in self.client.search(search_text="*")]
         return docs
 
@@ -324,7 +299,9 @@ def create_vector_store_index(
     return vector_store
 
 
-def get_vector_store(google_sheet_id: str) -> VectorStore:
+def get_vector_store(
+    google_sheet_id: str, check_if_exists: bool = False
+) -> VectorStore:
     """Get vector store from Azure Search."""
     vector_store_id = googleid_to_vectorstoreid(google_sheet_id)
     vector_store = VectorStore(
@@ -336,7 +313,7 @@ def get_vector_store(google_sheet_id: str) -> VectorStore:
         store_id=vector_store_id,
     )
     # if index is not found, create it
-    if vector_store.client.get_document_count() == 0:
+    if check_if_exists and vector_store.count_documents() == 0:
         logger.info(f"Vector store {vector_store_id} not found. Creating new one.")
         vector_store = create_vector_store_index(
             document_type="googlesheet",
