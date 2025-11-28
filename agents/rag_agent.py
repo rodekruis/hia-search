@@ -4,7 +4,7 @@ from langchain_core.documents import Document
 from typing_extensions import List
 from langchain_openai import AzureChatOpenAI
 from langgraph.graph import StateGraph, MessagesState
-from langchain_core.messages import SystemMessage
+from langchain.messages import SystemMessage
 from langchain_core.tools import tool
 from langgraph.graph import END
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 import os
 from utils.vector_store import get_vector_store
 from utils.groundedness import detect_groundness
-from utils.prompt_loader import PromptLoader
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -48,11 +47,6 @@ def retrieve(query: str, googleSheetId: str) -> tuple[str, List[Document]]:
     retrieved_docs = vector_store.similarity_search(query, k=5)
     serialized = "\n\n".join(f"Document: {doc.page_content}" for doc in retrieved_docs)
     return serialized, retrieved_docs
-
-
-# # Load RAG agent's prompt
-# with open("config/rag_agent_prompt.txt", "r") as f:
-#     rag_agent_prompt = f.read()
 
 
 # Define retrieve-or-respond node

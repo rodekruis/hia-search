@@ -1,15 +1,7 @@
-from typing import List
-
 import urllib
 import pandas as pd
 from utils.logger import logger
-import uuid
 from fastapi import HTTPException
-
-
-def uuid_hash(content: str) -> str:
-    """Create a unique hash from the page content of a document"""
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, content))
 
 
 class PromptLoader:

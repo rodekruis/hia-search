@@ -165,7 +165,7 @@ class VectorStore:
         else:
             raise HTTPException(
                 status_code=500,
-                detail=f"Vectore store {self.store_service} not available. Only 'azuresearch' are currently available.",
+                detail=f"Vector store {self.store_service} not available. Only 'azuresearch' are currently available.",
             )
 
     def _add_embedding_model_to_metadata(self, metadatas: list) -> List[dict]:
@@ -191,7 +191,7 @@ class VectorStore:
         else:
             raise HTTPException(
                 status_code=500,
-                detail=f"Vectore store {self.store_service} not available. Only 'azuresearch' are currently available.",
+                detail=f"Vector store {self.store_service} not available. Only 'azuresearch' are currently available.",
             )
 
     def add_documents(self, chunked_documents: List[Document]) -> int:
