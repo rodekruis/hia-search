@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from utils.vector_store import get_vector_store
 from agents.rag_agent import rag_agent
 from utils.logger import logger
+from utils.prompt_loader import PromptLoader
 import time
 import os
 import hashlib
@@ -71,31 +72,41 @@ async def chat_dummy(
     request: Request,
     api_key: str = Depends(key_query_scheme),
     googleSheetId: str = "14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04",
+    threadId: str = None,
 ):
     """Dummy chat endpoint for testing"""
 
     if api_key != os.environ["API_KEY"]:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    start_time = time.time()
-
     # use hashed client host as memory thread ID
-    threadId = hashlib.sha256(str(request.client.host).encode()).hexdigest()
+    if threadId is None:
+        threadId = hashlib.sha256(str(request.client.host).encode()).hexdigest()
     config = {"configurable": {"thread_id": threadId}}
 
     # check if vector store exists for the given googleSheetId
     _ = get_vector_store(googleSheetId, check_if_exists=True)
 
+    # get system prompt
+    prompt_loader = PromptLoader(
+        document_type="googlesheet",
+        document_id=googleSheetId,
+    )
+    prompt = prompt_loader.get_prompt()
+    if prompt == "":
+        # use default prompt
+        with open("config/rag_agent_prompt.txt", "r") as f:
+            prompt = f.read()
+
     # invoke the agent graph with the question
     response = rag_agent.invoke(
         {
             "messages": [
-                SystemMessage(f"googleSheetId is {googleSheetId}"),
+                SystemMessage(prompt + f" googleSheetId is {googleSheetId}."),
                 HumanMessage(payload.message),
             ]
         },
         config=config,
     )
-    print("--- %s seconds ---" % (time.time() - start_time))
 
     return {"response": response["messages"][-1].content}
