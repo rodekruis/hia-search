@@ -36,11 +36,22 @@ async def chat_twilio_webhook(
     # check if vector store exists for the given googleSheetId
     _ = get_vector_store(googleSheetId, check_if_exists=True)
 
+    # get system prompt
+    prompt_loader = PromptLoader(
+        document_type="googlesheet",
+        document_id=googleSheetId,
+    )
+    prompt = prompt_loader.get_prompt()
+    if prompt == "":
+        # use default prompt
+        with open("config/rag_agent_prompt.txt", "r") as f:
+            prompt = f.read()
+
     # invoke the agent graph with the question
     response = rag_agent.invoke(
         {
             "messages": [
-                SystemMessage(f"googleSheetId is {googleSheetId}"),
+                SystemMessage(prompt + f" googleSheetId is {googleSheetId}."),
                 HumanMessage(message),
             ]
         },
