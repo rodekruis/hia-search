@@ -4,7 +4,7 @@ from langchain_core.documents import Document
 from typing_extensions import List
 from langchain_openai import AzureChatOpenAI
 from langgraph.graph import StateGraph, MessagesState
-from langchain_core.messages import SystemMessage
+from langchain.messages import SystemMessage
 from langchain_core.tools import tool
 from langgraph.graph import END
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -49,18 +49,31 @@ def retrieve(query: str, googleSheetId: str) -> tuple[str, List[Document]]:
     return serialized, retrieved_docs
 
 
-# Load RAG agent's prompt
-with open("config/rag_agent_prompt.txt", "r") as f:
-    rag_agent_prompt = f.read()
-
-
 # Define retrieve-or-respond node
 def query_or_respond(state: MessagesState) -> dict:
     """Generate tool call for retrieval or respond."""
     llm_with_tools = llm.bind_tools([retrieve])
-    prompt = [SystemMessage(f"{rag_agent_prompt}")] + state["messages"][-5:]
+    # prompt = [SystemMessage(f"{rag_agent_prompt}")] + state["messages"]
+    # response = llm_with_tools.invoke(prompt)
+
+    # Get most recent message of type system to use as system prompt
+    system_prompt = [
+        message.content
+        for message in reversed(state["messages"])
+        if message.type == "system"
+    ][0]
+
+    # Pass also recent conversation messages
+    conversation_messages = [
+        message
+        for message in state["messages"]
+        if message.type == "human" or (message.type == "ai" and not message.tool_calls)
+    ][-10:]
+
+    prompt = [SystemMessage(system_prompt)] + conversation_messages
 
     response = llm_with_tools.invoke(prompt)
+
     # MessagesState appends messages to state instead of overwriting
     return {"messages": [response]}
 
@@ -76,27 +89,33 @@ def generate(state: MessagesState):
             recent_tool_messages.append(message)
         else:
             break
-    tool_messages = [doc.content for doc in recent_tool_messages[::-1]]
-    docs_content = "\n\n".join(tool_messages)
+    tool_messages = recent_tool_messages[::-1]
+    docs = [doc.content for doc in tool_messages]
+    docs_content = "\n\n".join(docs)
 
-    # Format into prompt
-    system_message_content = f"{rag_agent_prompt}.\n\n{docs_content}"
+    # Get most recent message of type system to use as system prompt
+    system_prompt = [
+        message.content
+        for message in reversed(state["messages"])
+        if message.type == "system"
+    ][0]
+
+    # Merge system prompt with retrieved docs
+    system_prompt = f"{system_prompt}.\n\n{docs_content}"
 
     # Pass also recent conversation messages
     conversation_messages = [
         message
         for message in state["messages"]
-        if message.type in ("human", "system")
-        or (message.type == "ai" and not message.tool_calls)
-    ]
-    prompt = [SystemMessage(system_message_content)] + conversation_messages[-5:]
+        if message.type == "human" or (message.type == "ai" and not message.tool_calls)
+    ][-10:]
+    prompt = [SystemMessage(system_prompt)] + conversation_messages
 
     # Run
     response = llm.invoke(prompt)
 
     # Check groundedness
     user_query = conversation_messages[-1].content
-    docs = docs_content.split("\n\nDocument: ")
     response.content = detect_groundness(
         content_text=response.content, grounding_sources=docs, query=user_query
     )

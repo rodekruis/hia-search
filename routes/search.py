@@ -70,7 +70,7 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     # load vector store
-    vector_store = get_vector_store(payload.googleSheetId)
+    vector_store = get_vector_store(payload.googleSheetId, check_if_exists=True)
 
     # translate if necessary
     if payload.lang != "en":
