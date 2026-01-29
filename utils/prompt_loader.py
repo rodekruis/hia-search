@@ -53,13 +53,13 @@ class PromptLoader:
                 detail=f"Loader of document type {self.document_type} not available.",
             )
         # get prompt from column #VALUE and row with #KEY containing #system-prompt
-        df = df.dropna(subset=["#KEY"])
         try:
+            df = df.dropna(subset=["#KEY"])
             prompt = (
                 df[df["#KEY"].str.contains("#system-prompt")]["#VALUE"]
                 .values[0]
                 .strip()
             )
-        except IndexError:
+        except (IndexError, KeyError) as e:
             prompt = ""
         return prompt

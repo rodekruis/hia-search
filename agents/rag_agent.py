@@ -114,11 +114,11 @@ def generate(state: MessagesState):
     # Run
     response = llm.invoke(prompt)
 
-    # Check groundedness
-    user_query = conversation_messages[-1].content
-    response.content = detect_groundness(
-        content_text=response.content, grounding_sources=docs, query=user_query
-    )
+    # # Check groundedness
+    # user_query = conversation_messages[-1].content
+    # response.content = detect_groundness(
+    #     content_text=response.content, grounding_sources=docs, query=user_query
+    # )
 
     return {"messages": [response]}
 
