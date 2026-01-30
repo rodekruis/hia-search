@@ -9,6 +9,7 @@ from langchain_community.document_loaders import DataFrameLoader
 import uuid
 from fastapi import HTTPException
 from cleantext import clean
+from utils.translator import translate, detect_language
 
 dm = DocumentMetadata()
 
@@ -104,18 +105,6 @@ class DocumentLoader:
         df["text"] = df[dm.QUESTION] + " " + df[dm.ANSWER]
         df["text"] = df["text"].str.replace(r"<[^<]+?>", "", regex=True)
         df["text"] = df["text"].str.replace(r"\n", " ", regex=True)
-        df["text"] = df["text"].apply(
-            lambda x: clean(
-                x,
-                lower=False,
-                no_line_breaks=True,
-                no_urls=True,
-                no_emoji=True,
-            )
-        )
-        df["text"] = df["text"].str.replace("[<URL>]", "")
-        df["text"] = df["text"].str.replace("(<URL>)", "")
-        df["text"] = df["text"].str.replace("<URL>", "")
         df["text"] = df["text"].str.replace("**", "")
         df["text"] = df["text"].astype(str)
 
@@ -135,6 +124,19 @@ class DocumentLoader:
                 "text",
             ]
         ]
+
+        # Translate content to English
+        def translate_row(row):
+            detected_lang = detect_language(row["text"])
+            if detected_lang != "en":
+                translated_text = translate(
+                    from_lang=detected_lang, to_lang="en", text=row["text"]
+                )
+                return translated_text
+            else:
+                return row["text"]
+
+        df["text"] = df.apply(translate_row, axis=1)
 
         # map to langchain doc
         documents = DataFrameLoader(df, page_content_column="text").load()
