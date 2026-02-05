@@ -60,6 +60,6 @@ class PromptLoader:
                 .values[0]
                 .strip()
             )
-        except (IndexError, KeyError) as e:
+        except (IndexError, KeyError, AttributeError) as e:
             prompt = ""
         return prompt
