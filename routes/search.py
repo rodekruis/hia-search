@@ -1,9 +1,9 @@
 from __future__ import annotations
+from enum import Enum
 
 import pandas as pd
-from fastapi import Depends, APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from utils.vector_store import get_vector_store
 from utils.constants import DocumentMetadata
@@ -17,8 +17,6 @@ import os
 dm = DocumentMetadata()
 
 router = APIRouter()
-
-key_query_scheme = APIKeyHeader(name="Authorization")
 
 
 def get_score_google_index(docs_and_scores, google_index: str) -> float:
@@ -50,7 +48,7 @@ class SearchPayload(BaseModel):
     )
     googleSheetId: str = Field(
         ...,
-        description="""HIA Google sheet ID""",
+        description="""HIA Google Spreadsheet ID""",
     )
     k: int = Field(
         5,
@@ -60,14 +58,18 @@ class SearchPayload(BaseModel):
         "en",
         description="""Language of the search query; results will be translated to this language""",
     )
+    source: str = Field(
+        "Q&As",
+        description="""Source sheet of the search; can only be 'Q&As'""",
+    )
 
 
 @router.post("/search", tags=["search"])
-async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme)):
+async def search(payload: SearchPayload):
     """Search HIA."""
 
-    if api_key != os.environ["API_KEY"]:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    if payload.source not in ["Q&As"]:
+        raise HTTPException(status_code=400, detail="Invalid source; must be 'Q&As'")
 
     # load vector store
     vector_store = get_vector_store(payload.googleSheetId, check_if_exists=True)
