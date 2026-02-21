@@ -1,8 +1,8 @@
 from __future__ import annotations
 from fastapi import (
-    Depends,
     APIRouter,
     HTTPException,
+    Request
 )
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
@@ -33,17 +33,18 @@ class VectorStorePayload(BaseModel):
 
 @router.post("/create-vector-store", tags=["data"])
 async def create_vector_store(
-    payload: VectorStorePayload, api_key: str = Depends(key_query_scheme)
+    payload: VectorStorePayload, request: Request
 ):
     """Create a vector store from a HIA instance. Replace all entries if it already exists."""
-
-    if api_key != os.environ["API_KEY_WRITE"]:
-        raise HTTPException(status_code=401, detail="Unauthorized")
 
     if payload.data:
         document_type = "json"
     else:
         document_type = "googlesheet"
+
+    if document_type == "json":
+        if "Authorization" not in request.headers or request.headers["Authorization"] != os.environ["API_KEY_WRITE"]:
+            raise HTTPException(status_code=401, detail="Unauthorized")
 
     vector_store = create_vector_store_index(
         document_type=document_type,
@@ -60,12 +61,9 @@ async def create_vector_store(
 
 @router.delete("/delete-vector-store", tags=["data"])
 async def delete_vector_store(
-    payload: VectorStorePayload, api_key: str = Depends(key_query_scheme)
+    payload: VectorStorePayload
 ):
     """Delete a vector store."""
-
-    if api_key != os.environ["API_KEY_WRITE"]:
-        raise HTTPException(status_code=401, detail="Unauthorized")
 
     vector_store_id = googleid_to_vectorstoreid(payload.googleSheetId)
     azure_search_index_client = SearchIndexClient(

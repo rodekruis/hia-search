@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from fastapi import Depends, Request, Response, APIRouter, HTTPException
-from fastapi.security import APIKeyHeader
+from fastapi import Request, Response, APIRouter
 from twilio.twiml.messaging_response import MessagingResponse
 from langchain.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
@@ -9,14 +8,10 @@ from utils.vector_store import get_vector_store
 from agents.rag_agent import rag_agent
 from utils.logger import logger
 from utils.prompt_loader import PromptLoader
-import os
 import hashlib
 from utils.translator import translate, detect_language
 
 router = APIRouter()
-
-key_query_scheme = APIKeyHeader(name="Authorization")
-
 
 def chat(threadId: str, googleSheetId: str, message: str) -> dict:
     """Core chat function used by multiple endpoints."""
@@ -99,14 +94,10 @@ class MessagePayload(BaseModel):
 async def chat_dummy(
     payload: MessagePayload,
     request: Request,
-    api_key: str = Depends(key_query_scheme),
     googleSheetId: str = "14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04",
     threadId: str = None,
 ):
     """Dummy chat endpoint for testing"""
-
-    if api_key != os.environ["API_KEY"]:
-        raise HTTPException(status_code=401, detail="Unauthorized")
 
     # if thread ID is not provided, use hashed client host
     if threadId is None:
