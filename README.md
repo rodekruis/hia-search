@@ -15,32 +15,49 @@ Inspired by [`knowledge-enriched-chatbot`](https://github.com/deloitte-nl/knowle
 #### Search
 
 ```mermaid
-flowchart LR
-    User -->|query + lang| API[FastAPI]
-    API -->|translate to EN| T[Azure Translator]
-    T -->|English query| VS[Azure AI Search]
-    VS -->|ranked Q&As| API
-    API -->|translate results| T
-    T -->|localized results| API
-    API -->|results JSON| User
+sequenceDiagram
+    participant User
+    participant API as FastAPI
+    participant T as Azure Translator
+    participant VS as Azure AI Search
+
+    User->>API: query + lang
+    API->>T: translate query to EN
+    T-->>API: English query
+    API->>VS: similarity search
+    VS-->>API: ranked results
+    API->>T: translate results to user lang
+    T-->>API: localized results
+    API-->>User: results JSON
 ```
 
 #### Chat
 
 ```mermaid
-flowchart LR
-    User -->|message| API[FastAPI]
-    API -->|detect + translate| T[Azure Translator]
-    T -->|English message| Agent[LangGraph\nRAG Agent]
-    Agent -->|retrieve docs| VS[Azure AI Search]
-    VS -->|relevant Q&As| Agent
-    Agent <-->|conversation\nhistory| DB[(PostgreSQL)]
-    Agent -->|prompt + docs| LLM[Azure OpenAI]
-    LLM -->|response| Agent
-    Agent --> API
-    API -->|translate back| T
-    T -->|localized response| API
-    API -->|answer| User
+sequenceDiagram
+    participant User
+    participant API as FastAPI
+    participant T as Azure Translator
+    participant Agent as LangGraph RAG Agent
+    participant VS as Azure AI Search
+    participant DB as PostgreSQL
+    participant LLM as Azure OpenAI
+
+    User->>API: message
+    API->>T: detect language + translate to EN
+    T-->>API: English message
+    API->>Agent: invoke with message + thread ID
+    Agent->>DB: load conversation history
+    DB-->>Agent: previous messages
+    Agent->>VS: retrieve relevant docs
+    VS-->>Agent: Q&A documents
+    Agent->>LLM: prompt + docs + history
+    LLM-->>Agent: generated response
+    Agent->>DB: save new messages
+    Agent-->>API: response
+    API->>T: translate response to user lang
+    T-->>API: localized response
+    API-->>User: answer
 ```
 
 1. User sends a query via the `/search`, `/chat-dummy`, or `/chat-twilio-webhook` endpoint.
