@@ -53,9 +53,24 @@ def chat(
     # extract retrieved context from tool messages if requested
     retrieved_context = None
     if include_context:
-        retrieved_context = [
-            msg.content for msg in response["messages"] if msg.type == "tool"
-        ]
+        # Each tool message contains concatenated docs separated by "\n\nDocument: "
+        # Split them into individual documents and deduplicate
+        all_docs = []
+        seen = set()
+        for msg in response["messages"]:
+            if msg.type == "tool":
+                # Split on the "Document: " prefix pattern
+                parts = msg.content.split("\n\nDocument: ")
+                for i, part in enumerate(parts):
+                    # First part already starts with "Document: ", others don't
+                    doc_text = (
+                        part if part.startswith("Document: ") else f"Document: {part}"
+                    )
+                    doc_text = doc_text.strip()
+                    if doc_text and doc_text not in seen:
+                        seen.add(doc_text)
+                        all_docs.append(doc_text)
+        retrieved_context = all_docs
 
     # translate response back to original language if needed
     if detected_lang != "en":

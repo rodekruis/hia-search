@@ -89,7 +89,7 @@ class TestChatDummy:
     ):
         mock_prompt_loader.return_value.get_prompt.return_value = "prompt"
         mock_agent.invoke.return_value = _make_agent_response(
-            "answer", tool_contents=["ctx1", "ctx2"]
+            "answer", tool_contents=["Document: ctx1", "Document: ctx2"]
         )
 
         resp = client.post(
@@ -101,7 +101,7 @@ class TestChatDummy:
         assert resp.status_code == 200
         body = resp.json()
         assert body["response"] == "answer"
-        assert body["context"] == ["ctx1", "ctx2"]
+        assert body["context"] == ["Document: ctx1", "Document: ctx2"]
 
     @patch("routes.chat.get_vector_store")
     @patch("routes.chat.detect_language", return_value="en")
