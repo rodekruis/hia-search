@@ -12,16 +12,34 @@ Inspired by [`knowledge-enriched-chatbot`](https://github.com/deloitte-nl/knowle
 
 ### Architecture
 
+#### Search
+
 ```mermaid
 flowchart LR
-    User -->|query| API[FastAPI]
-    API -->|translate to EN| Translator[Azure Translator]
-    Translator --> Search[Azure AI Search]
-    Search -->|relevant Q&As| Agent[LangGraph\nRAG Agent]
+    User -->|query + lang| API[FastAPI]
+    API -->|translate to EN| T[Azure Translator]
+    T -->|English query| VS[Azure AI Search]
+    VS -->|ranked Q&As| API
+    API -->|translate results| T
+    T -->|localized results| API
+    API -->|results JSON| User
+```
+
+#### Chat
+
+```mermaid
+flowchart LR
+    User -->|message| API[FastAPI]
+    API -->|detect + translate| T[Azure Translator]
+    T -->|English message| Agent[LangGraph\nRAG Agent]
+    Agent -->|retrieve docs| VS[Azure AI Search]
+    VS -->|relevant Q&As| Agent
     Agent <-->|conversation\nhistory| DB[(PostgreSQL)]
     Agent -->|prompt + docs| LLM[Azure OpenAI]
-    LLM -->|response| Translator
-    Translator -->|translate back| API
+    LLM -->|response| Agent
+    Agent --> API
+    API -->|translate back| T
+    T -->|localized response| API
     API -->|answer| User
 ```
 
