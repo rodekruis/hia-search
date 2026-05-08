@@ -1,6 +1,7 @@
 [tool.poetry]
 name = "hia-search"
 version = "0.0.1"
+package-mode = false
 authors = [
   "Jacopo Margutti <jmargutti@redcross.nl>"
 ]
