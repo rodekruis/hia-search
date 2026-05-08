@@ -15,7 +15,7 @@ Inspired by [`knowledge-enriched-chatbot`](https://github.com/deloitte-nl/knowle
 ```mermaid
 flowchart LR
     User -->|query| API[FastAPI]
-    API -->|translate to EN| Translator[MS Cognitive\nServices Translator]
+    API -->|translate to EN| Translator[Azure Translator]
     Translator --> Search[Azure AI Search]
     Search -->|relevant Q&As| Agent[LangGraph\nRAG Agent]
     Agent <-->|conversation\nhistory| DB[(PostgreSQL)]
