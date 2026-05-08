@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from dotenv import load_dotenv
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
@@ -17,10 +18,19 @@ exporter = AzureMonitorLogExporter(
 )
 logger_provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
 
-# Attach LoggingHandler to root logger
-handler = LoggingHandler()
-logging.getLogger().addHandler(handler)
-logging.getLogger().setLevel(logging.NOTSET)
+# Attach OpenTelemetry handler to root logger
+otel_handler = LoggingHandler()
+logging.getLogger().addHandler(otel_handler)
+
+# Attach console handler for stdout output
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(
+    logging.Formatter("%(asctime)s : %(levelname)s : %(message)s")
+)
+logging.getLogger().addHandler(console_handler)
+
+logging.getLogger().setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Silence noisy loggers

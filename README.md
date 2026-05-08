@@ -6,9 +6,43 @@ Search and chat with [HIA](https://github.com/rodekruis/helpful-information).
 
 Synopsis: a [dockerized](https://www.docker.com/) [Python](https://www.python.org/) API to search and chat with [HIA](https://github.com/rodekruis/helpful-information).
 
-Based on [LangChain](https://github.com/langchain-ai/langchain), powered by language models. Uses [Poetry](https://python-poetry.org/) for dependency management and [Azure AI Search](https://learn.microsoft.com/en-us/azure/search/search-what-is-azure-search) for indexing and searching.
+Based on [LangChain](https://github.com/langchain-ai/langchain), powered by language models. Uses [uv](https://docs.astral.sh/uv/) for dependency management and [Azure AI Search](https://learn.microsoft.com/en-us/azure/search/search-what-is-azure-search) for indexing and searching.
 
 Inspired by [`knowledge-enriched-chatbot`](https://github.com/deloitte-nl/knowledge-enriched-chatbot) and [`HIA-search-engine`](https://github.com/PetrovViktor/HIA-search-engine), kudos to the authors.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    User -->|query| API[FastAPI]
+    API -->|translate to EN| Translator[MS Cognitive\nServices Translator]
+    Translator --> Search[Azure AI Search]
+    Search -->|relevant Q&As| Agent[LangGraph\nRAG Agent]
+    Agent <-->|conversation\nhistory| DB[(PostgreSQL)]
+    Agent -->|prompt + docs| LLM[Azure OpenAI]
+    LLM -->|response| Translator
+    Translator -->|translate back| API
+    API -->|answer| User
+```
+
+1. User sends a query via the `/search`, `/chat-dummy`, or `/chat-twilio-webhook` endpoint.
+2. The query is translated to English (if needed) using Microsoft Cognitive Services.
+3. Relevant Q&A documents are retrieved from Azure AI Search.
+4. For chat endpoints, a LangGraph RAG agent passes the documents + conversation history to Azure OpenAI to generate a response.
+5. The response is translated back to the user's language.
+
+## Prerequisites
+
+- [Python](https://www.python.org/) 3.12
+- [uv](https://docs.astral.sh/uv/) for dependency management
+- An [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/) deployment (chat + embeddings models)
+- An [Azure AI Search](https://learn.microsoft.com/en-us/azure/search/) service
+- A [PostgreSQL](https://www.postgresql.org/) database (for conversation history)
+- A [Microsoft Cognitive Services](https://learn.microsoft.com/en-us/azure/cognitive-services/translator/) Translator resource
+- (Optional) A [Twilio](https://www.twilio.com/) account with an active phone/WhatsApp number
+- (Optional) An [Azure Application Insights](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview) resource for monitoring
+
+See [`example.env`](./example.env) for all required environment variables.
 
 ## Usage
 
@@ -17,7 +51,6 @@ Inspired by [`knowledge-enriched-chatbot`](https://github.com/deloitte-nl/knowle
 [Set up a HIA instance](https://github.com/rodekruis/helpful-information/blob/main/docs/Guide-How_to_set_up_an_instance.md) and populate its content.
 
 ### 2. Set up the search service
-
   - Find the item called `HIA Search API-key(s) [production]` in Bitwarden and copy the value of `API_KEY`
   - Go to the HIA repository's "**Settings**" > "**Secret and variables**" > "**Actions**" > "**New repository secret**"
   - Name the secret: `SEARCH_API_KEY`and insert the API Key as value
@@ -40,7 +73,7 @@ Inspired by [`knowledge-enriched-chatbot`](https://github.com/deloitte-nl/knowle
   - Redeploy HIA by triggering the deployment workflow: `Actions` > `Deploy to GitHub Pages` > `Run workflow`
   
 
-### 2. Set up the chat service
+### 3. Set up the chat service
 
 The chat service is based on [Twilio incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook). You need an active Twilio account and an active phone or WhatsApp number, see [how to buy one](https://help.twilio.com/articles/223135247-How-to-Search-for-and-Buy-a-Twilio-Phone-Number-from-Console).
 
@@ -54,9 +87,9 @@ The answer will be sent via message directly to the user. The phone number of th
 >The instructions that the chatbot will follow are by default [these ones](config/rag_agent_prompt.txt). If you want to customize them, create a new sheet named `Chat` in your HIA Google Sheet file following [this template](https://docs.google.com/spreadsheets/d/1op6Ouyxtwv4f8GAEAMSn5PVzcXtfZuftMiLYWsX0pbs/edit?pli=1&gid=1707339525#gid=1707339525), then insert the desired instructions under `#VALUE`, cell `B2`. Make sure to follow [best practices in prompt engineering](https://www.promptingguide.ai/introduction/tips); if it's the first time you do this, make sure the CEA Data Specialist reviews what you wrote.
 
 
-### 3. Keep your data up to date
+### 4. Keep your data up to date
 
-Both the chat and search services need HIA content to be transformed into _embeddings_, i.e. numerical representations of text that capture semantic meaning in a high-dimensional vector space. Embeddings are stored in dedicated databases called _vector stores_. When searching or chatting with HIA, the user query 
+Both the chat and search services need HIA content to be transformed into _embeddings_, i.e. numerical representations of text that capture semantic meaning in a high-dimensional vector space. Embeddings are stored in dedicated databases called _vector stores_. When searching or chatting with HIA, the user query is compared against these embeddings to find the most relevant Q&A pairs.
 
 Generating and storing the embeddings of your specific HIA instance is done automatically the first time you call the chat or search endpoints, if the HIA Google Sheet file is publicly accessible. If the Google Sheet file is not publicly accessible or you need to update it, you can use the  `/create-vector-store` endpoint, which you can call directly from [the swagger UI](https://hia-search.azurewebsites.net). You will need to authenticate with `API_KEY_WRITE`, which you find in Bitwarden. See API reference below.
 
@@ -111,6 +144,26 @@ and returns a list of relevant questions and answers, in this format:
 
  This endpoint is protected with the `API_KEY` environment variable. As this key will be stored by the client-application in plain-text, visible in the browser, it should be considered public. Its main purpose is to prevent abuse of the API by unauthorized users (with possible future measures against it).
 
+### `/chat-dummy`
+
+The `/chat-dummy` endpoint is a test/development chat endpoint that accepts:
+* `message` (body): the user message
+* `googleSheetId` (query, optional): the Google Sheet ID (defaults to a test sheet)
+* `threadId` (query, optional): a conversation thread ID; if omitted, one is derived from the client IP
+* `include_context` (query, optional): when `true`, the response includes the retrieved context documents
+
+It returns the chatbot's response as JSON. Protected with `API_KEY`.
+
+### `/chat-twilio-webhook`
+
+The `/chat-twilio-webhook` endpoint receives incoming messages from Twilio and responds via SMS/WhatsApp. See [Set up the chat service](#3-set-up-the-chat-service) for configuration.
+
+### `/delete-vector-store`
+
+The `/delete-vector-store` endpoint accepts a `googleSheetId` body parameter and deletes the corresponding Azure AI Search index.
+
+🔐 This endpoint is protected with the `API_KEY_WRITE` environment variable.
+
 ## Configuration
 
 ```sh
@@ -122,15 +175,16 @@ Edit the provided [ENV-variables](./example.env) accordingly.
 ### Run locally
 
 ```sh
-pip install poetry
-poetry install --no-root
-python -m spacy download en_core_web_sm
-uvicorn main:app --reload
+pip install uv
+uv sync
+uv run python -m spacy download en_core_web_sm
+uv run uvicorn main:app --reload
 ```
 
 ### Run with Docker
 
 ```sh
 docker build -t hia-search .
+docker run -p 8000:8000 --env-file .env hia-search
 ```
 

@@ -7,20 +7,6 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from routes import search, data, chat
 import os
-import logging
-import sys
-
-logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
-handler = logging.StreamHandler(sys.stdout)
-handler.setLevel(logging.INFO)
-formatter = logging.Formatter("%(asctime)s : %(levelname)s : %(message)s")
-handler.setFormatter(formatter)
-logger.addHandler(handler)
-logging.getLogger("requests").setLevel(logging.WARNING)
-logging.getLogger("urllib3").setLevel(logging.WARNING)
-logging.getLogger("azure").setLevel(logging.WARNING)
-logging.getLogger("requests_oauthlib").setLevel(logging.WARNING)
 from dotenv import load_dotenv
 
 load_dotenv()

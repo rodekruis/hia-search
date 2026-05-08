@@ -1,7 +1,6 @@
 from __future__ import annotations
 import re
 import copy
-from pathlib import Path
 from typing import List
 from fastapi import HTTPException
 from langchain_community.embeddings import HuggingFaceEmbeddings

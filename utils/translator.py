@@ -2,6 +2,7 @@ import requests
 import os
 from dotenv import load_dotenv
 import pandas as pd
+from utils.logger import logger
 
 load_dotenv()
 
@@ -17,13 +18,18 @@ def translate(from_lang: str, to_lang: str, text: str) -> str:
         "Content-type": "application/json",
     }
     translator_url = "https://api.cognitive.microsofttranslator.com/translate"
-    translator_response = requests.post(
-        translator_url,
-        params=translator_params,
-        headers=translator_headers,
-        json=[{"text": text}],
-    ).json()
-    return translator_response[0]["translations"][0]["text"]
+    try:
+        response = requests.post(
+            translator_url,
+            params=translator_params,
+            headers=translator_headers,
+            json=[{"text": text}],
+        )
+        response.raise_for_status()
+        return response.json()[0]["translations"][0]["text"]
+    except (requests.RequestException, KeyError, IndexError) as e:
+        logger.error(f"Translation API error: {e}")
+        return text
 
 
 def detect_language(text: str) -> str:
@@ -37,10 +43,15 @@ def detect_language(text: str) -> str:
         "Content-type": "application/json",
     }
     detector_url = "https://api.cognitive.microsofttranslator.com/detect"
-    detector_response = requests.post(
-        detector_url,
-        params=detector_params,
-        headers=detector_headers,
-        json=[{"text": text}],
-    ).json()
-    return detector_response[0]["language"]
+    try:
+        response = requests.post(
+            detector_url,
+            params=detector_params,
+            headers=detector_headers,
+            json=[{"text": text}],
+        )
+        response.raise_for_status()
+        return response.json()[0]["language"]
+    except (requests.RequestException, KeyError, IndexError) as e:
+        logger.error(f"Language detection API error: {e}")
+        return "en"

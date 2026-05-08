@@ -5,11 +5,12 @@ from twilio.twiml.messaging_response import MessagingResponse
 from langchain.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
 from utils.vector_store import get_vector_store
-from agents.rag_agent import rag_agent
+from agents.rag_agent import get_rag_agent
 from utils.logger import logger
 from utils.prompt_loader import PromptLoader
 import hashlib
 from utils.translator import translate, detect_language
+from pathlib import Path
 
 router = APIRouter()
 
@@ -35,11 +36,14 @@ def chat(
     prompt = prompt_loader.get_prompt()
     if prompt == "":
         # use default prompt
-        with open("config/rag_agent_prompt.txt", "r") as f:
+        prompt_path = (
+            Path(__file__).resolve().parent.parent / "config" / "rag_agent_prompt.txt"
+        )
+        with open(prompt_path, "r") as f:
             prompt = f.read()
 
     # invoke the agent graph with the question
-    response = rag_agent.invoke(
+    response = get_rag_agent().invoke(
         {
             "messages": [
                 SystemMessage(prompt + f" googleSheetId is {googleSheetId}."),
@@ -94,8 +98,12 @@ async def chat_twilio_webhook(
     if message is None:
         return Response(content="No message provided", status_code=400)
 
+    sender = form_data.get("From", None)
+    if sender is None:
+        return Response(content="No sender provided", status_code=400)
+
     # use the hashed phone number or channel address that sent this message as memory thread ID
-    threadId = hashlib.sha256(form_data.get("From").encode()).hexdigest()
+    threadId = hashlib.sha256(sender.encode()).hexdigest()
 
     result = chat(threadId, googleSheetId, message)
 
