@@ -13,13 +13,13 @@ class DocumentMetadata:
     ANSWER = "answer"
     # vector store fields for Offers sheet
     NAME = "name"
-    DESCRIPTION = "desciption"
+    DESCRIPTION = "description"
     PHONENUMBERS = "phonenumbers"
     EMAILS = "emails"
     WEBURLS = "weburls"
     ADDRESS = "address"
     OPENWEEK = "openweek"
-    OPENWEEKEND = "openwekend"
+    OPENWEEKEND = "openweekend"
     NEEDTOKNOW = "needtoknow"
     MOREINFO = "moreinfo"
     # splitting and embedding fields

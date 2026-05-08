@@ -22,12 +22,8 @@ _ENV_DEFAULTS = {
     "OPENAI_ENDPOINT": "https://fake-openai.openai.azure.com/",
     "OPENAI_API_KEY": "fake-key",
     "OPENAI_API_VERSION": "2024-02-01",
-    "AISAFETY_ENDPOINT": "https://fake-safety.cognitiveservices.azure.com",
-    "AISAFETY_API_KEY": "fake-safety-key",
-    "AISAFETY_API_VERSION": "2024-06-01",
     "MODEL_EMBEDDINGS": "text-embedding-ada-002",
     "MODEL_CHAT": "gpt-4",
-    "MODEL_GROUNDEDNESS": "gpt-4",
     "APPLICATIONINSIGHTS_CONNECTION_STRING": "InstrumentationKey=00000000-0000-0000-0000-000000000000",
     "MSCOGNITIVE_KEY": "fake-cognitive-key",
     "MSCOGNITIVE_LOCATION": "westeurope",
@@ -46,7 +42,8 @@ sys.modules.setdefault("utils.logger", MagicMock(logger=_mock_logger))
 
 # Mock the rag_agent module so it doesn't connect to PostgreSQL / OpenAI
 _mock_rag_agent = MagicMock()
-sys.modules.setdefault("agents.rag_agent", MagicMock(rag_agent=_mock_rag_agent))
+_mock_get_rag_agent = MagicMock(return_value=_mock_rag_agent)
+sys.modules.setdefault("agents.rag_agent", MagicMock(get_rag_agent=_mock_get_rag_agent))
 
 # ---------------------------------------------------------------------------
 # Now it's safe to import the FastAPI app

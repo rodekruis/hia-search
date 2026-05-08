@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass
+import atexit
 from langchain_core.documents import Document
 from typing_extensions import List
 from langchain_openai import AzureChatOpenAI
@@ -12,29 +12,31 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from pydantic import BaseModel, Field
 import os
 from utils.vector_store import get_vector_store
-from utils.groundedness import detect_groundness
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# Lazy-initialized globals
+_llm = None
+_rag_agent = None
+_checkpointer_context = None
 
-@dataclass
-class ContextSchema:
-    googleSheetId: str
 
-
-# Initialize the LLM client
-llm = AzureChatOpenAI(
-    azure_endpoint=os.environ["OPENAI_ENDPOINT"],
-    azure_deployment=os.environ["MODEL_CHAT"],
-    openai_api_version=os.environ["OPENAI_API_VERSION"],
-    temperature=0.2,
-)
+def _get_llm():
+    """Lazily initialize the LLM client."""
+    global _llm
+    if _llm is None:
+        _llm = AzureChatOpenAI(
+            azure_endpoint=os.environ["OPENAI_ENDPOINT"],
+            azure_deployment=os.environ["MODEL_CHAT"],
+            openai_api_version=os.environ["OPENAI_API_VERSION"],
+            temperature=0.2,
+        )
+    return _llm
 
 
 class RetrieveInput(BaseModel):
     """Input schema for retrieval tool."""
-
     query: str = Field(description="The search query to retrieve relevant documents.")
     googleSheetId: str = Field(description="The ID of the Google Sheet to search.")
 
@@ -43,7 +45,7 @@ class RetrieveInput(BaseModel):
 @tool(response_format="content_and_artifact", args_schema=RetrieveInput)
 def retrieve(query: str, googleSheetId: str) -> tuple[str, List[Document]]:
     """Retrieve information related to a query."""
-    vector_store = get_vector_store(googleSheetId)
+    vector_store = get_vector_store(googleSheetId, check_if_exists=True)
     retrieved_docs = vector_store.similarity_search(query, k=20)
     serialized = "\n\n".join(f"Document: {doc.page_content}" for doc in retrieved_docs)
     return serialized, retrieved_docs
@@ -52,9 +54,7 @@ def retrieve(query: str, googleSheetId: str) -> tuple[str, List[Document]]:
 # Define retrieve-or-respond node
 def query_or_respond(state: MessagesState) -> dict:
     """Generate tool call for retrieval or respond."""
-    llm_with_tools = llm.bind_tools([retrieve])
-    # prompt = [SystemMessage(f"{rag_agent_prompt}")] + state["messages"]
-    # response = llm_with_tools.invoke(prompt)
+    llm_with_tools = _get_llm().bind_tools([retrieve])
 
     # Get most recent message of type system to use as system prompt
     system_prompt = [
@@ -112,35 +112,46 @@ def generate(state: MessagesState):
     prompt = [SystemMessage(system_prompt)] + conversation_messages
 
     # Run
-    response = llm.invoke(prompt)
-
-    # # Check groundedness
-    # user_query = conversation_messages[-1].content
-    # response.content = detect_groundness(
-    #     content_text=response.content, grounding_sources=docs, query=user_query
-    # )
+    response = _get_llm().invoke(prompt)
 
     return {"messages": [response]}
 
 
-# Define and build the agent graph
-DB_URI = f'postgresql://{os.environ["CHECKPOINT_DB_USER"]}:{os.environ["CHECKPOINT_DB_PASSWORD"]}@{os.environ["CHECKPOINT_DB_HOST"]}'
-_checkpointer_context = PostgresSaver.from_conn_string(DB_URI)
-checkpointer = _checkpointer_context.__enter__()
+def _cleanup_checkpointer():
+    """Clean up the PostgresSaver context manager on shutdown."""
+    if _checkpointer_context is not None:
+        _checkpointer_context.__exit__(None, None, None)
 
-tools = ToolNode([retrieve])
-graph_builder = StateGraph(MessagesState)
-graph_builder.add_node(query_or_respond)
-graph_builder.add_node(tools)
-graph_builder.add_node(generate)
 
-graph_builder.set_entry_point("query_or_respond")
-graph_builder.add_conditional_edges(
-    "query_or_respond",
-    tools_condition,
-    {END: END, "tools": "tools"},
-)
-graph_builder.add_edge("tools", "generate")
-graph_builder.add_edge("generate", END)
+def _build_agent():
+    """Build and return the RAG agent graph (called once on first use)."""
+    global _checkpointer_context
+    db_uri = f'postgresql://{os.environ["CHECKPOINT_DB_USER"]}:{os.environ["CHECKPOINT_DB_PASSWORD"]}@{os.environ["CHECKPOINT_DB_HOST"]}'
+    _checkpointer_context = PostgresSaver.from_conn_string(db_uri)
+    checkpointer = _checkpointer_context.__enter__()
+    atexit.register(_cleanup_checkpointer)
 
-rag_agent = graph_builder.compile(checkpointer=checkpointer)
+    tools = ToolNode([retrieve])
+    graph_builder = StateGraph(MessagesState)
+    graph_builder.add_node(query_or_respond)
+    graph_builder.add_node(tools)
+    graph_builder.add_node(generate)
+
+    graph_builder.set_entry_point("query_or_respond")
+    graph_builder.add_conditional_edges(
+        "query_or_respond",
+        tools_condition,
+        {END: END, "tools": "tools"},
+    )
+    graph_builder.add_edge("tools", "generate")
+    graph_builder.add_edge("generate", END)
+
+    return graph_builder.compile(checkpointer=checkpointer)
+
+
+def get_rag_agent():
+    """Lazily initialize and return the RAG agent."""
+    global _rag_agent
+    if _rag_agent is None:
+        _rag_agent = _build_agent()
+    return _rag_agent

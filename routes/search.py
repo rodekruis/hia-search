@@ -1,5 +1,4 @@
 from __future__ import annotations
-from enum import Enum
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException
@@ -95,7 +94,7 @@ async def search(payload: SearchPayload):
             json.loads(doc["metadata"], strict=False)
             for doc in vector_store.get_documents()
         ]
-    )  # load all documents from vector store
+    )  # load all documents from vector store, needed to find parent and child questions for results
     results = []
     for doc_and_score in docs_and_scores:
         doc = doc_and_score[0]

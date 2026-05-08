@@ -186,48 +186,6 @@ class TestPromptLoader:
 
 
 # ---------------------------------------------------------------------------
-# groundedness.py
-# ---------------------------------------------------------------------------
-
-
-class TestGroundedness:
-
-    @patch("utils.groundedness.requests.post")
-    def test_no_ungrounded_content(self, mock_post):
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {
-            "ungroundedDetected": False,
-            "ungroundedPercentage": 0.0,
-            "ungroundedDetails": [],
-        }
-
-        from utils.groundedness import detect_groundness
-
-        result = detect_groundness(
-            content_text="All facts are grounded.",
-            grounding_sources=["source1"],
-            query="test query",
-        )
-
-        assert result == "All facts are grounded."
-
-    @patch("utils.groundedness.requests.post")
-    def test_api_error_returns_original(self, mock_post):
-        mock_post.return_value.status_code = 500
-        mock_post.return_value.text = "Internal Server Error"
-
-        from utils.groundedness import detect_groundness
-
-        result = detect_groundness(
-            content_text="Some text.",
-            grounding_sources=["src"],
-            query="q",
-        )
-
-        assert result == "Some text."
-
-
-# ---------------------------------------------------------------------------
 # search helpers
 # ---------------------------------------------------------------------------
 
