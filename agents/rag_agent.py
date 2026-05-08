@@ -44,7 +44,7 @@ class RetrieveInput(BaseModel):
 def retrieve(query: str, googleSheetId: str) -> tuple[str, List[Document]]:
     """Retrieve information related to a query."""
     vector_store = get_vector_store(googleSheetId)
-    retrieved_docs = vector_store.similarity_search(query, k=5)
+    retrieved_docs = vector_store.similarity_search(query, k=20)
     serialized = "\n\n".join(f"Document: {doc.page_content}" for doc in retrieved_docs)
     return serialized, retrieved_docs
 
