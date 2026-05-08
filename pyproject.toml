@@ -1,13 +1,13 @@
 [tool.poetry]
 name = "hia-search"
 version = "0.0.1"
+package-mode = false
 authors = [
   "Jacopo Margutti <jmargutti@redcross.nl>"
 ]
 description = "HIA search"
 readme = "README.md"
 repository = "https://github.com/rodekruis/hia-search"
-packages = [{include = "src"}]
 
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"
@@ -18,17 +18,25 @@ chromadb = "*"
 clean-text = "*"
 fastapi = "*"
 langchain = "*"
-langgraph-checkpoint-postgres = "*"
 langchain-community = "*"
 langchain-openai = "*"
+langchain-text-splitters = "*"
 langgraph = "*"
+langgraph-checkpoint-postgres = "*"
 orjson = "*"
 pandas = "*"
+python-dotenv = "*"
 python-multipart = "*"
+requests = "*"
 spacy = "*"
 twilio = "*"
 Unidecode = "*"
 urllib3 = ">=2.6.0"
+uvicorn = "*"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "*"
+httpx = "*"
 
 [build-system]
 requires = ["poetry-core"]

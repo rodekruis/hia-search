@@ -13,7 +13,10 @@ from utils.translator import translate, detect_language
 
 router = APIRouter()
 
-def chat(threadId: str, googleSheetId: str, message: str) -> dict:
+
+def chat(
+    threadId: str, googleSheetId: str, message: str, include_context: bool = False
+) -> dict:
     """Core chat function used by multiple endpoints."""
 
     # check if vector store exists for the given googleSheetId (if it doesn't, it will be created)
@@ -47,13 +50,22 @@ def chat(threadId: str, googleSheetId: str, message: str) -> dict:
     )
     response_text = response["messages"][-1].content
 
+    # extract retrieved context from tool messages if requested
+    retrieved_context = None
+    if include_context:
+        retrieved_context = [
+            msg.content for msg in response["messages"] if msg.type == "tool"
+        ]
+
     # translate response back to original language if needed
     if detected_lang != "en":
         response_text = translate(
             from_lang="en", to_lang=detected_lang, text=response_text
         )
 
-    return response_text
+    if include_context:
+        return {"response": response_text, "context": retrieved_context}
+    return {"response": response_text}
 
 
 @router.post("/chat-twilio-webhook", tags=["chat"])
@@ -70,15 +82,15 @@ async def chat_twilio_webhook(
     # use the hashed phone number or channel address that sent this message as memory thread ID
     threadId = hashlib.sha256(form_data.get("From").encode()).hexdigest()
 
-    response_text = chat(threadId, googleSheetId, message)
+    result = chat(threadId, googleSheetId, message)
 
     # log user message and assistant response
     extra_logs = {"googleSheetId": googleSheetId, "threadId": threadId}
-    logger.info(f"user: {message}, assistant: {response_text}", extra=extra_logs)
+    logger.info(f"user: {message}, assistant: {result['response']}", extra=extra_logs)
 
     # return TwiML response
     resp = MessagingResponse()
-    resp.message(response_text)
+    resp.message(result["response"])
     return Response(content=str(resp), media_type="application/xml")
 
 
@@ -96,6 +108,7 @@ async def chat_dummy(
     request: Request,
     googleSheetId: str = "14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04",
     threadId: str = None,
+    include_context: bool = False,
 ):
     """Dummy chat endpoint for testing"""
 
@@ -103,6 +116,8 @@ async def chat_dummy(
     if threadId is None:
         threadId = hashlib.sha256(str(request.client.host).encode()).hexdigest()
 
-    response_text = chat(threadId, googleSheetId, payload.message)
+    result = chat(
+        threadId, googleSheetId, payload.message, include_context=include_context
+    )
 
-    return {"response": response_text}
+    return result
