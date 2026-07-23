@@ -17,6 +17,7 @@ ADD config /app/config
 COPY ./main.py /app/main.py
 COPY ./pyproject.toml /app/pyproject.toml
 COPY ./uv.lock /app/uv.lock
+COPY ./README.md /app/README.md
 
 # set the working directory in the container to be /app
 WORKDIR /app
