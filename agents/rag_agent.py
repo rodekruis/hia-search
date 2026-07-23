@@ -9,6 +9,7 @@ from langchain_core.tools import tool
 from langgraph.graph import END
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
 import os
 from utils.vector_store import get_vector_store
@@ -19,7 +20,7 @@ load_dotenv()
 # Lazy-initialized globals
 _llm = None
 _rag_agent = None
-_checkpointer_context = None
+_checkpointer_pool = None
 
 
 def _get_llm():
@@ -118,18 +119,30 @@ def generate(state: MessagesState):
 
 
 def _cleanup_checkpointer():
-    """Clean up the PostgresSaver context manager on shutdown."""
-    if _checkpointer_context is not None:
-        _checkpointer_context.__exit__(None, None, None)
+    """Close the connection pool on shutdown."""
+    if _checkpointer_pool is not None:
+        _checkpointer_pool.close()
 
 
 def _build_agent():
     """Build and return the RAG agent graph (called once on first use)."""
-    global _checkpointer_context
+    global _checkpointer_pool
     db_uri = f'postgresql://{os.environ["CHECKPOINT_DB_USER"]}:{os.environ["CHECKPOINT_DB_PASSWORD"]}@{os.environ["CHECKPOINT_DB_HOST"]}'
-    _checkpointer_context = PostgresSaver.from_conn_string(db_uri)
-    checkpointer = _checkpointer_context.__enter__()
+
+    # Use a connection pool that validates connections on checkout so that
+    # stale/closed connections (idle timeouts, DB restarts, network blips)
+    # are transparently recreated instead of raising "the connection is closed".
+    _checkpointer_pool = ConnectionPool(
+        conninfo=db_uri,
+        max_size=20,
+        open=True,
+        check=ConnectionPool.check_connection,
+        kwargs={"autocommit": True, "prepare_threshold": 0},
+    )
     atexit.register(_cleanup_checkpointer)
+
+    checkpointer = PostgresSaver(_checkpointer_pool)
+    checkpointer.setup()
 
     tools = ToolNode([retrieve])
     graph_builder = StateGraph(MessagesState)
