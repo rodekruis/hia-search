@@ -104,3 +104,105 @@ def test_direct_answer_resets_retrieved_docs(vector_store):
     assert [m.type for m in result["messages"]] == ["human", "ai", "human", "ai"]
     # second turn's prompt carries prior conversation but no tool scaffolding
     assert [m.type for m in llm.prompts[2][1:]] == ["human", "ai", "human"]
+
+
+def test_conversation_window_keeps_last_ten_turns():
+    from langchain_core.messages import HumanMessage
+
+    messages = [
+        AIMessage(content=f"m{i}") if i % 2 else HumanMessage(content=f"m{i}")
+        for i in range(30)
+    ]
+    window = rag_agent._conversation({"messages": messages})
+    assert len(window) == 10
+    assert window[-1].content == "m29"
+
+
+def test_retrieve_tool_schema_hides_sheet_id():
+    """The LLM only sees `query`; the sheet id is injected from config."""
+    assert set(rag_agent.retrieve.args) == {"query"}
+
+
+class TestBuildAgent:
+    """Postgres wiring: URL-encoded creds, sslmode, pool health checks."""
+
+    @pytest.fixture()
+    def wired(self, monkeypatch):
+        monkeypatch.setenv("CHECKPOINT_DB_USER", "user@host")
+        monkeypatch.setenv("CHECKPOINT_DB_PASSWORD", "p#a$s&w*o^rd")
+        monkeypatch.setenv("CHECKPOINT_DB_HOST", "db.example:5432/dbname")
+        pool_cls = MagicMock(name="ConnectionPool")
+        pool_cls.check_connection = rag_agent.ConnectionPool.check_connection
+        saver_cls = MagicMock(name="PostgresSaver")
+        build_graph = MagicMock(name="build_graph")
+        monkeypatch.setattr(rag_agent, "ConnectionPool", pool_cls)
+        monkeypatch.setattr(rag_agent, "PostgresSaver", saver_cls)
+        monkeypatch.setattr(rag_agent, "build_graph", build_graph)
+        monkeypatch.setattr(rag_agent, "_checkpointer_pool", None)
+        monkeypatch.setattr(rag_agent, "_rag_agent", None)
+        return pool_cls, saver_cls, build_graph
+
+    def test_connection_uri_is_encoded_and_encrypted(self, wired):
+        pool_cls, saver_cls, build_graph = wired
+
+        agent = rag_agent._build_agent()
+
+        conninfo = pool_cls.call_args.kwargs["conninfo"]
+        assert conninfo == (
+            "postgresql://user%40host:p%23a%24s%26w%2Ao%5Erd@db.example:5432/dbname"
+            "?sslmode=require"
+        )
+        # stale connections are detected on checkout
+        assert pool_cls.call_args.kwargs["check"] is rag_agent.ConnectionPool.check_connection
+        assert pool_cls.call_args.kwargs["kwargs"] == {"autocommit": True, "prepare_threshold": 0}
+        saver_cls.assert_called_once_with(pool_cls.return_value)
+        saver_cls.return_value.setup.assert_called_once()
+        build_graph.assert_called_once_with(saver_cls.return_value)
+        assert agent is build_graph.return_value
+
+    def test_host_with_existing_query_string_appends_sslmode(self, wired, monkeypatch):
+        pool_cls, _, _ = wired
+        monkeypatch.setenv("CHECKPOINT_DB_HOST", "db.example/db?application_name=hia")
+
+        rag_agent._build_agent()
+
+        assert pool_cls.call_args.kwargs["conninfo"].endswith(
+            "db.example/db?application_name=hia&sslmode=require"
+        )
+
+    def test_get_rag_agent_builds_once(self, wired):
+        _, _, build_graph = wired
+
+        first = rag_agent.get_rag_agent()
+        second = rag_agent.get_rag_agent()
+
+        assert first is second is build_graph.return_value
+        build_graph.assert_called_once()
+
+    def test_cleanup_closes_pool(self, wired):
+        pool_cls, _, _ = wired
+        rag_agent._build_agent()
+
+        rag_agent._cleanup_checkpointer()
+
+        pool_cls.return_value.close.assert_called_once()
+
+
+def test_get_llm_uses_azure_env(monkeypatch):
+    llm_cls = MagicMock(name="AzureChatOpenAI")
+    monkeypatch.setattr(rag_agent, "AzureChatOpenAI", llm_cls)
+    monkeypatch.setattr(rag_agent, "_llm", None)
+    monkeypatch.setenv("OPENAI_ENDPOINT", "https://oai.example")
+    monkeypatch.setenv("MODEL_CHAT", "gpt-test")
+    monkeypatch.setenv("OPENAI_API_VERSION", "2024-06-01")
+
+    first = rag_agent._get_llm()
+    second = rag_agent._get_llm()
+
+    llm_cls.assert_called_once_with(
+        azure_endpoint="https://oai.example",
+        azure_deployment="gpt-test",
+        openai_api_version="2024-06-01",
+        temperature=0.2,
+    )
+    assert first is second

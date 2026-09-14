@@ -139,3 +139,106 @@ class TestSearch:
 
         assert resp.status_code == 200
         assert len(resp.json()["results"]) == 1
+
+    @patch("routes.search.get_vector_store")
+    def test_parent_result_includes_children_with_their_scores(self, mock_get_vs, client):
+        parent = {
+            "categoryID": 1, "subcategoryID": 1, "slug": "housing", "parent": None,
+            "question": "Housing?", "answer": "Overview.", "google_index": "QnAs1",
+        }
+        child_hit = {**parent, "slug": "", "parent": "housing", "question": "Rent?",
+                     "answer": "Rent info.", "google_index": "QnAs2"}
+        child_miss = {**child_hit, "question": "Buy?", "answer": "Buy info.", "google_index": "QnAs3"}
+        mock_get_vs.return_value = _make_vector_store(
+            docs_and_scores=[(_make_doc(parent), 0.9), (_make_doc(child_hit), 0.7)],
+            all_docs_metadata=[parent, child_hit, child_miss],
+        )
+
+        resp = client.post("/search", json={"query": "q", "googleSheetId": "s"})
+
+        results = resp.json()["results"]
+        # parent and its child hit collapse into one parent entry
+        assert len(results) == 1
+        assert results[0]["question"] == "Housing?"
+        assert "google_index" not in results[0]
+        children = {c["question"]: c["score"] for c in results[0]["children"]}
+        assert children == {"Rent?": 0.7, "Buy?": 0.0}
+
+    @patch("routes.search.get_vector_store")
+    def test_child_hit_is_promoted_to_its_parent(self, mock_get_vs, client):
+        parent = {
+            "categoryID": 1, "subcategoryID": 1, "slug": "work", "parent": None,
+            "question": "Work?", "answer": "Overview.", "google_index": "QnAs1",
+        }
+        child = {**parent, "slug": "", "parent": "work", "question": "Permit?",
+                 "answer": "Permit info.", "google_index": "QnAs2"}
+        mock_get_vs.return_value = _make_vector_store(
+            docs_and_scores=[(_make_doc(child), 0.8)],
+            all_docs_metadata=[parent, child],
+        )
+
+        resp = client.post("/search", json={"query": "q", "googleSheetId": "s"})
+
+        result = resp.json()["results"][0]
+        assert result["question"] == "Work?"
+        assert result["slug"] == "work"
+        # parent carries the matched child's score
+        assert result["score"] == 0.8
+        assert [c["question"] for c in result["children"]] == ["Permit?"]
+
+    @patch("routes.search.get_vector_store")
+    def test_child_with_unknown_parent_is_returned_as_is(self, mock_get_vs, client):
+        orphan = {
+            "categoryID": 1, "subcategoryID": 1, "slug": "", "parent": "gone",
+            "question": "Orphan?", "answer": "A.", "google_index": "QnAs9",
+        }
+        mock_get_vs.return_value = _make_vector_store(
+            docs_and_scores=[(_make_doc(orphan), 0.5)], all_docs_metadata=[orphan]
+        )
+
+        resp = client.post("/search", json={"query": "q", "googleSheetId": "s"})
+
+        result = resp.json()["results"][0]
+        assert result["question"] == "Orphan?" and result["children"] is None
+
+    @patch("routes.search.translate")
+    @patch("routes.search.get_vector_store")
+    def test_translation_covers_query_and_children(self, mock_get_vs, mock_translate, client):
+        parent = {
+            "categoryID": 1, "subcategoryID": 1, "slug": "p", "parent": None,
+            "question": "P?", "answer": "PA.", "google_index": "QnAs1",
+        }
+        child = {**parent, "slug": "", "parent": "p", "question": "C?", "answer": "CA.",
+                 "google_index": "QnAs2"}
+        vs = _make_vector_store(
+            docs_and_scores=[(_make_doc(parent), 0.9)], all_docs_metadata=[parent, child]
+        )
+        mock_get_vs.return_value = vs
+        mock_translate.side_effect = lambda from_lang, to_lang, text: f"[{to_lang}]{text}"
+
+        resp = client.post(
+            "/search", json={"query": "vraag", "googleSheetId": "s", "lang": "nl", "k": 3}
+        )
+
+        # query translated to English before retrieval, with the requested k
+        vs.similarity_search_with_score.assert_called_once_with(query="[en]vraag", k=3)
+        result = resp.json()["results"][0]
+        assert result["question"] == "[nl]P?" and result["answer"] == "[nl]PA."
+        assert result["children"][0]["question"] == "[nl]C?"
+        assert result["children"][0]["answer"] == "[nl]CA."
+
+    @patch("routes.search.get_vector_store")
+    def test_english_query_is_not_translated(self, mock_get_vs, client):
+        meta = {
+            "categoryID": 1, "subcategoryID": 1, "slug": "", "parent": None,
+            "question": "Q", "answer": "A", "google_index": "QnAs1",
+        }
+        vs = _make_vector_store(docs_and_scores=[(_make_doc(meta), 0.9)], all_docs_metadata=[meta])
+        mock_get_vs.return_value = vs
+
+        with patch("routes.search.translate") as mock_translate:
+            client.post("/search", json={"query": "hello", "googleSheetId": "s"})
+
+        mock_translate.assert_not_called()
+        vs.similarity_search_with_score.assert_called_once_with(query="hello", k=5)
+        mock_get_vs.assert_called_once_with("s", check_if_exists=True)

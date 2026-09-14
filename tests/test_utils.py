@@ -44,6 +44,40 @@ class TestTranslate:
         assert result == ""
         mock_post.assert_not_called()
 
+    @patch("utils.translator.requests.post")
+    def test_translate_returns_original_on_request_error(self, mock_post):
+        import requests
+        from utils.translator import translate
+
+        mock_post.side_effect = requests.ConnectionError("down")
+        assert translate(from_lang="nl", to_lang="en", text="Hallo") == "Hallo"
+
+    @patch("utils.translator.requests.post")
+    def test_translate_returns_original_on_http_error(self, mock_post):
+        import requests
+        from utils.translator import translate
+
+        mock_post.return_value.raise_for_status.side_effect = requests.HTTPError("401")
+        assert translate(from_lang="nl", to_lang="en", text="Hallo") == "Hallo"
+
+    @patch("utils.translator.requests.post")
+    def test_translate_returns_original_on_malformed_payload(self, mock_post):
+        from utils.translator import translate
+
+        mock_post.return_value.json.return_value = [{}]
+        assert translate(from_lang="nl", to_lang="en", text="Hallo") == "Hallo"
+
+    @patch("utils.translator.requests.post")
+    def test_translate_sends_timeout_and_languages(self, mock_post):
+        from utils.translator import translate
+
+        mock_post.return_value.json.return_value = [{"translations": [{"text": "x"}]}]
+        translate(from_lang="nl", to_lang="en", text="Hallo")
+        kwargs = mock_post.call_args.kwargs
+        assert kwargs["timeout"] == 10
+        assert kwargs["params"]["from"] == ["nl"] and kwargs["params"]["to"] == ["en"]
+        assert kwargs["json"] == [{"text": "Hallo"}]
+
 
 class TestDetectLanguage:
 
@@ -76,6 +110,21 @@ class TestDetectLanguage:
         from utils.translator import detect_language
 
         assert detect_language("   ") == "en"
+
+    @patch("utils.translator.requests.post")
+    def test_detect_falls_back_to_english_on_error(self, mock_post):
+        import requests
+        from utils.translator import detect_language
+
+        mock_post.side_effect = requests.Timeout()
+        assert detect_language("Ciao mondo") == "en"
+
+    @patch("utils.translator.requests.post")
+    def test_detect_falls_back_to_english_on_malformed_payload(self, mock_post):
+        from utils.translator import detect_language
+
+        mock_post.return_value.json.return_value = []
+        assert detect_language("Ciao mondo") == "en"
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +232,96 @@ class TestPromptLoader:
         loader = PromptLoader(document_type="unknown", document_id="x")
         with pytest.raises(HTTPException):
             loader.get_prompt()
+
+    @patch("utils.prompt_loader.pd.read_csv")
+    def test_returns_empty_when_sheet_unreachable(self, mock_read_csv):
+        import urllib.error
+        from utils.prompt_loader import PromptLoader
+
+        mock_read_csv.side_effect = urllib.error.HTTPError(
+            url="u", code=404, msg="nf", hdrs=None, fp=None
+        )
+        assert PromptLoader(document_type="googlesheet", document_id="x").get_prompt() == ""
+
+    @patch("utils.prompt_loader.pd.read_csv")
+    def test_returns_empty_when_key_column_missing(self, mock_read_csv):
+        import pandas as pd
+        from utils.prompt_loader import PromptLoader
+
+        mock_read_csv.return_value = pd.DataFrame({"foo": ["bar"]})
+        assert PromptLoader(document_type="googlesheet", document_id="x").get_prompt() == ""
+
+    @patch("utils.prompt_loader.pd.read_csv")
+    def test_ignores_rows_without_key(self, mock_read_csv):
+        import pandas as pd
+        from utils.prompt_loader import PromptLoader
+
+        mock_read_csv.return_value = pd.DataFrame(
+            {"#KEY": [None, "#system-prompt"], "#VALUE": ["junk", "Be kind."]}
+        )
+        assert PromptLoader(document_type="googlesheet", document_id="x").get_prompt() == "Be kind."
+
+    def test_json_loader_reads_header_row(self):
+        from utils.prompt_loader import PromptLoader
+
+        loader = PromptLoader(
+            document_type="json",
+            document_data={
+                "values": [["#KEY", "#VALUE"], ["#other", "x"], ["#system-prompt", " Hi "]]
+            },
+        )
+        assert loader.get_prompt() == "Hi"
+
+
+# ---------------------------------------------------------------------------
+# auth.py
+# ---------------------------------------------------------------------------
+
+
+class TestAuthHelpers:
+    def test_require_write_key_accepts_and_rejects(self, monkeypatch):
+        from fastapi import HTTPException
+        from utils.auth import require_write_key
+
+        monkeypatch.setenv("API_KEY_WRITE", "w-key")
+        require_write_key("w-key")
+        with pytest.raises(HTTPException) as exc:
+            require_write_key("nope")
+        assert exc.value.status_code == 401
+
+    def test_missing_configured_key_rejects_everything(self, monkeypatch):
+        """An unset API key must not turn into 'anything goes'."""
+        from fastapi import HTTPException
+        from utils.auth import require_read_key
+
+        monkeypatch.setenv("API_KEY", "")
+        with pytest.raises(HTTPException):
+            require_read_key("")
+        with pytest.raises(HTTPException):
+            require_read_key(None)
+
+    def test_twilio_tokens_must_be_object(self, monkeypatch):
+        from utils.auth import _twilio_token_for
+
+        monkeypatch.setenv("TWILIO_AUTH_TOKENS", '["tok"]')
+        monkeypatch.setenv("TWILIO_AUTH_TOKEN", "fallback")
+        assert _twilio_token_for("sheet") is None
+
+    def test_twilio_tokens_map_ignores_global_fallback(self, monkeypatch):
+        from utils.auth import _twilio_token_for
+
+        monkeypatch.setenv("TWILIO_AUTH_TOKENS", '{"a": "tok-a"}')
+        monkeypatch.setenv("TWILIO_AUTH_TOKEN", "fallback")
+        assert _twilio_token_for("a") == "tok-a"
+        assert _twilio_token_for("b") is None
+        assert _twilio_token_for(None) is None
+
+    def test_twilio_single_token_used_without_map(self, monkeypatch):
+        from utils.auth import _twilio_token_for
+
+        monkeypatch.delenv("TWILIO_AUTH_TOKENS", raising=False)
+        monkeypatch.setenv("TWILIO_AUTH_TOKEN", "fallback")
+        assert _twilio_token_for("anything") == "fallback"
 
 
 # ---------------------------------------------------------------------------

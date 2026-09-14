@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from unittest.mock import patch, MagicMock
@@ -525,6 +526,44 @@ class TestChatTwilioWebhook:
         )
 
         assert resp.status_code == 400
+
+    def test_twilio_missing_sender(self, client):
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Hi"}
+        resp = client.post(
+            "/chat-twilio-webhook",
+            params=params,
+            data=form,
+            headers=_twilio_headers("/chat-twilio-webhook", params, form),
+        )
+        assert resp.status_code == 400
+        assert "sender" in resp.text
+
+    @patch("routes.chat.get_vector_store")
+    @patch("routes.chat.detect_language", return_value="en")
+    @patch("routes.chat.PromptLoader")
+    @patch("routes.chat.get_rag_agent")
+    def test_twilio_thread_is_hashed_sender(
+        self, mock_get_agent, mock_prompt_loader, mock_detect, mock_vs, client
+    ):
+        """Phone numbers never reach the checkpoint store in clear text."""
+        mock_prompt_loader.return_value.get_prompt.return_value = "prompt"
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = _make_agent_response("ok")
+        mock_get_agent.return_value = mock_agent
+
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Hi", "From": "whatsapp:+31612345678"}
+        client.post(
+            "/chat-twilio-webhook",
+            params=params,
+            data=form,
+            headers=_twilio_headers("/chat-twilio-webhook", params, form),
+        )
+
+        thread_id = mock_agent.invoke.call_args.kwargs["config"]["configurable"]["thread_id"]
+        assert thread_id == hashlib.sha256(b"whatsapp:+31612345678").hexdigest()
+        assert "31612345678" not in thread_id
 
     @patch("routes.chat.get_vector_store")
     @patch("routes.chat.detect_language", return_value="nl")
