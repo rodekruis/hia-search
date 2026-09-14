@@ -21,6 +21,22 @@ READ_KEY_HEADER = {"Authorization": "test-api-key"}
 TWILIO_TOKEN = "test-twilio-token"
 
 
+def _logged_text(mock_logger) -> str:
+    """Everything that reached the (mocked) application logger, flattened."""
+    return " ".join(
+        f"{call.args} {call.kwargs}" for call in mock_logger.mock_calls
+    )
+
+
+@pytest.fixture()
+def app_logger():
+    import sys
+
+    mock_logger = sys.modules["utils.logger"].logger
+    mock_logger.reset_mock()
+    return mock_logger
+
+
 @pytest.fixture()
 def client():
     """TestClient that sends the read API key by default."""
@@ -307,6 +323,43 @@ class TestChatDummy:
         )
         assert resp.status_code == 422
 
+    @patch("routes.chat.get_vector_store")
+    @patch("routes.chat.detect_language", return_value="uk")
+    @patch("routes.chat.translate", side_effect=lambda from_lang, to_lang, text: text)
+    @patch("routes.chat.get_system_prompt", return_value="prompt")
+    @patch("routes.chat.get_rag_agent")
+    def test_logs_turn_metadata_but_never_content(
+        self, mock_get_agent, mock_prompt, mock_translate, mock_detect, mock_vs, client, app_logger
+    ):
+        """Conversation content belongs to the LLM observability tool, not App Insights."""
+        user_text = "My asylum interview is tomorrow and I am scared"
+        bot_text = "Here is what will happen at the interview"
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = _make_agent_response(bot_text, doc_contents=["d1", "d2"])
+        mock_get_agent.return_value = mock_agent
+
+        resp = client.post(
+            "/chat-dummy",
+            params={"googleSheetId": "sheet123", "threadId": "t-1"},
+            json={"message": user_text},
+        )
+        assert resp.status_code == 200
+
+        logged = _logged_text(app_logger)
+        assert user_text not in logged
+        assert bot_text not in logged
+        assert "d1" not in logged
+
+        turn = next(c for c in app_logger.info.call_args_list if c.args[0] == "chat turn")
+        extra = turn.kwargs["extra"]
+        assert extra["googleSheetId"] == "sheet123"
+        assert extra["threadId"] == "t-1"
+        assert extra["detected_lang"] == "uk"
+        assert extra["retrieval_used"] is True and extra["n_docs"] == 2
+        assert extra["message_chars"] == len(user_text)
+        assert extra["response_chars"] == len(bot_text)
+        assert isinstance(extra["duration_ms"], int)
+
 
 # ---------------------------------------------------------------------------
 # /chat-twilio-webhook
@@ -341,6 +394,36 @@ class TestChatTwilioWebhook:
         assert "Hello from bot!" in resp.text
         assert resp.text.count("<Message>") == 1
         assert "(1/" not in resp.text
+
+    @patch("routes.chat.get_vector_store")
+    @patch("routes.chat.detect_language", return_value="en")
+    @patch("routes.chat.get_system_prompt", return_value="prompt")
+    @patch("routes.chat.get_rag_agent")
+    def test_twilio_logs_no_content_or_phone_number(
+        self, mock_get_agent, mock_prompt_loader, mock_detect, mock_vs, client, app_logger
+    ):
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = _make_agent_response("Go to the town hall.")
+        mock_get_agent.return_value = mock_agent
+
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Where do I register?", "From": "whatsapp:+31612345678"}
+        client.post(
+            "/chat-twilio-webhook",
+            params=params,
+            data=form,
+            headers=_twilio_headers("/chat-twilio-webhook", params, form),
+        )
+
+        logged = _logged_text(app_logger)
+        assert "Where do I register?" not in logged
+        assert "Go to the town hall." not in logged
+        assert "31612345678" not in logged
+        reply = next(c for c in app_logger.info.call_args_list if c.args[0] == "twilio reply")
+        assert reply.kwargs["extra"]["n_chunks"] == 1
+        assert reply.kwargs["extra"]["threadId"] == hashlib.sha256(
+            b"whatsapp:+31612345678"
+        ).hexdigest()
 
     @patch("routes.chat.get_vector_store")
     @patch("routes.chat.detect_language", return_value="en")

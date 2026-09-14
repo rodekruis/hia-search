@@ -219,6 +219,10 @@ Every response carries an `x-request-id` header. Unexpected failures return a st
 
 The Twilio webhook never returns these: if a reply cannot be generated, the user receives a short fallback message instead.
 
+### Logging & privacy
+
+Application logs (Azure Application Insights) contain **metadata only**: sheet id, hashed thread id, detected language, whether retrieval was used, message/response lengths, durations and error traces. User messages, assistant replies, search queries and phone numbers are never written to application logs. Conversation content is recorded exclusively in the LLM observability tool, with its own access control and retention.
+
 ## Configuration
 
 ```sh

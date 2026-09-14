@@ -12,6 +12,7 @@ from utils.messaging import number_chunks, split_message
 from utils.prompt_loader import get_system_prompt
 import hashlib
 import uuid
+from time import perf_counter
 from utils.translator import translate, detect_language
 
 router = APIRouter()
@@ -24,6 +25,8 @@ def chat(
     threadId: str, googleSheetId: str, message: str, include_context: bool = False
 ) -> dict:
     """Core chat function used by multiple endpoints."""
+    started = perf_counter()
+    message_chars = len(message)
 
     # ensure the vector store exists (created from the sheet if not); cached after the
     # first call, so this is the only existence check per turn
@@ -49,18 +52,33 @@ def chat(
         },
     )
     response_text = response["messages"][-1].content
+    docs = response.get("retrieved_docs") or []
 
     retrieved_context = None
     if include_context:
-        retrieved_context = [
-            doc.page_content for doc in response.get("retrieved_docs") or []
-        ]
+        retrieved_context = [doc.page_content for doc in docs]
 
     # translate response back to original language if needed
     if detected_lang != "en":
         response_text = translate(
             from_lang="en", to_lang=detected_lang, text=response_text
         )
+
+    # Metadata only: conversation content is recorded in the LLM observability
+    # tool, never in application logs.
+    logger.info(
+        "chat turn",
+        extra={
+            "googleSheetId": googleSheetId,
+            "threadId": threadId,
+            "detected_lang": detected_lang,
+            "retrieval_used": bool(docs),
+            "n_docs": len(docs),
+            "message_chars": message_chars,
+            "response_chars": len(response_text),
+            "duration_ms": round((perf_counter() - started) * 1000),
+        },
+    )
 
     if include_context:
         return {"response": response_text, "context": retrieved_context}
@@ -91,10 +109,7 @@ def chat_twilio_webhook(
     extra_logs = {"googleSheetId": googleSheetId, "threadId": threadId}
 
     try:
-        result = chat(threadId, googleSheetId, message)
-        response_text = result["response"]
-        # log user message and assistant response
-        logger.info(f"user: {message}, assistant: {response_text}", extra=extra_logs)
+        response_text = chat(threadId, googleSheetId, message)["response"]
     except Exception:
         # A 5xx would leave the user with no reply at all
         logger.exception("Twilio chat turn failed", extra=extra_logs)
@@ -102,8 +117,10 @@ def chat_twilio_webhook(
 
     # return TwiML response; long answers go out as several numbered messages,
     # since Twilio drops any single <Message> of 1600+ characters
+    chunks = number_chunks(split_message(response_text))
+    logger.info("twilio reply", extra={**extra_logs, "n_chunks": len(chunks)})
     resp = MessagingResponse()
-    for chunk in number_chunks(split_message(response_text)):
+    for chunk in chunks:
         resp.message(chunk)
     return Response(content=str(resp), media_type="application/xml")
 

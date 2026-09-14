@@ -242,3 +242,26 @@ class TestSearch:
         mock_translate.assert_not_called()
         vs.similarity_search_with_score.assert_called_once_with(query="hello", k=5)
         mock_get_vs.assert_called_once_with("s", check_if_exists=True)
+
+    @patch("routes.search.get_vector_store")
+    def test_query_text_is_not_logged(self, mock_get_vs, client):
+        import sys
+
+        app_logger = sys.modules["utils.logger"].logger
+        app_logger.reset_mock()
+        meta = {
+            "categoryID": 1, "subcategoryID": 1, "slug": "", "parent": None,
+            "question": "Q", "answer": "A", "google_index": "QnAs1",
+        }
+        mock_get_vs.return_value = _make_vector_store(
+            docs_and_scores=[(_make_doc(meta), 0.9)], all_docs_metadata=[meta]
+        )
+
+        client.post("/search", json={"query": "hiv test anonymous", "googleSheetId": "s", "k": 3})
+
+        logged = " ".join(f"{c.args} {c.kwargs}" for c in app_logger.mock_calls)
+        assert "hiv test anonymous" not in logged
+        entry = next(c for c in app_logger.info.call_args_list if c.args[0] == "search")
+        assert entry.kwargs["extra"] == {
+            "googleSheetId": "s", "lang": "en", "k": 3, "query_chars": 18, "n_results": 1
+        }

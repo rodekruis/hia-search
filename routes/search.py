@@ -79,10 +79,6 @@ async def search(payload: SearchPayload):
             from_lang=payload.lang, to_lang="en", text=payload.query
         )
 
-    # log query
-    extra_logs = {"googleSheetId": payload.googleSheetId, "lang": payload.lang}
-    logger.info(f"query: {payload.query}", extra=extra_logs)
-
     # retrieve documents
     docs_and_scores = vector_store.similarity_search_with_score(
         query=payload.query, k=payload.k
@@ -189,6 +185,18 @@ async def search(payload: SearchPayload):
                     child[dm.ANSWER] = translate(
                         from_lang="en", to_lang=payload.lang, text=child[dm.ANSWER]
                     )
+
+    # Metadata only; the query text itself is not logged.
+    logger.info(
+        "search",
+        extra={
+            "googleSheetId": payload.googleSheetId,
+            "lang": payload.lang,
+            "k": payload.k,
+            "query_chars": len(payload.query),
+            "n_results": len(results),
+        },
+    )
 
     return ORJSONResponse(
         status_code=200,
