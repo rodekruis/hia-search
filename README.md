@@ -184,7 +184,7 @@ and returns a list of relevant questions and answers, in this format:
 The `/chat-dummy` endpoint is a test/development chat endpoint that accepts:
 * `message` (body): the user message
 * `googleSheetId` (query, optional): the Google Sheet ID (defaults to a test sheet)
-* `threadId` (query, optional): a conversation thread ID; if omitted, one is derived from the client IP
+* `threadId` (query, optional): a conversation thread ID (max 200 chars); if omitted, a new random one is generated. The response includes the `threadId` used, so pass it back to continue the same conversation
 * `include_context` (query, optional): when `true`, the response includes the retrieved context documents
 
 It returns the chatbot's response as JSON. Protected with `API_KEY`.

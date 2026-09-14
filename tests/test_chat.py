@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from unittest.mock import patch, MagicMock
 import pytest
 from fastapi.testclient import TestClient
@@ -285,6 +286,43 @@ class TestChatDummy:
             or mock_agent.invoke.call_args[0][1]
         )
         assert config["configurable"]["thread_id"] == "my-thread-42"
+        assert resp.json()["threadId"] == "my-thread-42"
+
+    @patch("routes.chat.get_vector_store")
+    @patch("routes.chat.detect_language", return_value="en")
+    @patch("routes.chat.PromptLoader")
+    @patch("routes.chat.get_rag_agent")
+    def test_generates_fresh_thread_id_when_omitted(
+        self, mock_get_agent, mock_prompt_loader, mock_detect, mock_vs, client
+    ):
+        """Without threadId each request gets its own random thread, never a shared one."""
+        mock_prompt_loader.return_value.get_prompt.return_value = "prompt"
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = _make_agent_response("ok")
+        mock_get_agent.return_value = mock_agent
+
+        ids = []
+        for _ in range(2):
+            resp = client.post(
+                "/chat-dummy",
+                params={"googleSheetId": "sheet123"},
+                json={"message": "hello"},
+            )
+            assert resp.status_code == 200
+            thread_id = resp.json()["threadId"]
+            uuid.UUID(thread_id)  # raises if not a valid uuid
+            config = mock_agent.invoke.call_args[1]["config"]
+            assert config["configurable"]["thread_id"] == thread_id
+            ids.append(thread_id)
+        assert ids[0] != ids[1]
+
+    def test_rejects_overlong_thread_id(self, client):
+        resp = client.post(
+            "/chat-dummy",
+            params={"googleSheetId": "sheet123", "threadId": "x" * 201},
+            json={"message": "hello"},
+        )
+        assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------

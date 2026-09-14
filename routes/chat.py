@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import Request, Response, APIRouter, Depends, Form
+from fastapi import Response, APIRouter, Depends, Form, Query
 from twilio.twiml.messaging_response import MessagingResponse
 from langchain.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
@@ -10,6 +10,7 @@ from utils.auth import require_read_key, require_twilio_signature
 from utils.logger import logger
 from utils.prompt_loader import PromptLoader
 import hashlib
+import uuid
 from utils.translator import translate, detect_language
 from pathlib import Path
 
@@ -88,8 +89,6 @@ def chat(
     return {"response": response_text}
 
 
-# Chat handlers are plain `def`: the agent, translation and DB calls are blocking,
-# so FastAPI must run them in its threadpool instead of on the event loop.
 @router.post(
     "/chat-twilio-webhook",
     tags=["chat"],
@@ -137,19 +136,24 @@ class MessagePayload(BaseModel):
 )
 def chat_dummy(
     payload: MessagePayload,
-    request: Request,
     googleSheetId: str = "14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04",
-    threadId: str = None,
+    threadId: str | None = Query(
+        None,
+        min_length=1,
+        max_length=200,
+        description="Conversation thread ID. Omit to start a new conversation; "
+        "reuse the `threadId` returned in the response to continue it.",
+    ),
     include_context: bool = False,
 ):
     """Dummy chat endpoint for testing. Protected with `API_KEY`."""
 
-    # if thread ID is not provided, use hashed client host
     if threadId is None:
-        threadId = hashlib.sha256(str(request.client.host).encode()).hexdigest()
+        threadId = str(uuid.uuid4())
 
     result = chat(
         threadId, googleSheetId, payload.message, include_context=include_context
     )
+    result["threadId"] = threadId
 
     return result
