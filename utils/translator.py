@@ -24,6 +24,7 @@ def translate(from_lang: str, to_lang: str, text: str) -> str:
             params=translator_params,
             headers=translator_headers,
             json=[{"text": text}],
+            timeout=10,
         )
         response.raise_for_status()
         return response.json()[0]["translations"][0]["text"]
@@ -49,6 +50,7 @@ def detect_language(text: str) -> str:
             params=detector_params,
             headers=detector_headers,
             json=[{"text": text}],
+            timeout=10,
         )
         response.raise_for_status()
         return response.json()[0]["language"]

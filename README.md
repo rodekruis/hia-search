@@ -205,6 +205,20 @@ The `/delete-vector-store` endpoint accepts a `googleSheetId` body parameter and
 
 🔐 This endpoint is protected with the `API_KEY_WRITE` environment variable.
 
+### Errors
+
+Every response carries an `x-request-id` header. Unexpected failures return a structured body you can quote when reporting a problem:
+
+```json
+{"error": {"code": "external_service_error", "message": "An upstream service failed; please retry later", "request_id": "req_..."}}
+```
+
+* `502 external_service_error`: Azure OpenAI, Azure AI Search or the checkpoint database failed.
+* `500 internal_error`: unexpected error; details are only in the server logs.
+* `422 validation_error`: invalid input.
+
+The Twilio webhook never returns these: if a reply cannot be generated, the user receives a short fallback message instead.
+
 ## Configuration
 
 ```sh

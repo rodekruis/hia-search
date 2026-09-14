@@ -385,6 +385,33 @@ class TestChatTwilioWebhook:
         )
         assert resp.status_code == 401
 
+    @patch("routes.chat.get_vector_store")
+    @patch("routes.chat.detect_language", return_value="en")
+    @patch("routes.chat.PromptLoader")
+    @patch("routes.chat.get_rag_agent")
+    def test_twilio_replies_with_fallback_when_chat_fails(
+        self, mock_get_agent, mock_prompt_loader, mock_detect, mock_vs, client
+    ):
+        """Twilio gets valid TwiML (200) so the user is told something went wrong."""
+        mock_prompt_loader.return_value.get_prompt.return_value = "prompt"
+        mock_agent = MagicMock()
+        mock_agent.invoke.side_effect = RuntimeError("boom")
+        mock_get_agent.return_value = mock_agent
+
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Hi", "From": "+31612345678"}
+        resp = client.post(
+            "/chat-twilio-webhook",
+            params=params,
+            data=form,
+            headers=_twilio_headers("/chat-twilio-webhook", params, form),
+        )
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/xml"
+        assert "something went wrong" in resp.text
+        assert "boom" not in resp.text
+
     def test_twilio_invalid_signature(self, client):
         params = {"googleSheetId": "sheet123"}
         form = {"Body": "Hi", "From": "+31612345678"}

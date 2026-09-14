@@ -16,6 +16,9 @@ from pathlib import Path
 
 router = APIRouter()
 
+# Sent to the end user when generation fails; Twilio would otherwise deliver nothing.
+FALLBACK_MESSAGE = "Sorry, something went wrong on our side. Please try again in a few minutes."
+
 
 def chat(
     threadId: str, googleSheetId: str, message: str, include_context: bool = False
@@ -96,16 +99,21 @@ def chat_twilio_webhook(
 
     # use the hashed phone number or channel address that sent this message as memory thread ID
     threadId = hashlib.sha256(sender.encode()).hexdigest()
-
-    result = chat(threadId, googleSheetId, message)
-
-    # log user message and assistant response
     extra_logs = {"googleSheetId": googleSheetId, "threadId": threadId}
-    logger.info(f"user: {message}, assistant: {result['response']}", extra=extra_logs)
+
+    try:
+        result = chat(threadId, googleSheetId, message)
+        response_text = result["response"]
+        # log user message and assistant response
+        logger.info(f"user: {message}, assistant: {response_text}", extra=extra_logs)
+    except Exception:
+        # A 5xx would leave the user with no reply at all
+        logger.exception("Twilio chat turn failed", extra=extra_logs)
+        response_text = FALLBACK_MESSAGE
 
     # return TwiML response
     resp = MessagingResponse()
-    resp.message(result["response"])
+    resp.message(response_text)
     return Response(content=str(resp), media_type="application/xml")
 
 

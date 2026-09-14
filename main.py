@@ -6,6 +6,8 @@ from fastapi import (
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from routes import search, data, chat
+from utils.errors import register_exception_handlers
+from utils.middleware import RequestIdMiddleware
 import os
 from dotenv import load_dotenv
 
@@ -62,6 +64,9 @@ app.add_middleware(
     allow_methods=["POST"],
     allow_headers=["*"],
 )
+# Outermost so every response, including error responses, carries x-request-id
+app.add_middleware(RequestIdMiddleware)
+register_exception_handlers(app)
 
 
 @app.get("/", include_in_schema=False)
