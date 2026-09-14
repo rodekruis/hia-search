@@ -123,8 +123,8 @@ def test_retrieve_tool_schema_hides_sheet_id():
     assert set(rag_agent.retrieve.args) == {"query"}
 
 
-class TestBuildAgent:
-    """Postgres wiring: URL-encoded creds, sslmode, pool health checks."""
+class TestAgentLifecycle:
+    """Postgres wiring: URL-encoded creds, sslmode, pool health checks, init/close."""
 
     @pytest.fixture()
     def wired(self, monkeypatch):
@@ -145,7 +145,7 @@ class TestBuildAgent:
     def test_connection_uri_is_encoded_and_encrypted(self, wired):
         pool_cls, saver_cls, build_graph = wired
 
-        agent = rag_agent._build_agent()
+        agent = rag_agent.init_rag_agent()
 
         conninfo = pool_cls.call_args.kwargs["conninfo"]
         assert conninfo == (
@@ -164,28 +164,46 @@ class TestBuildAgent:
         pool_cls, _, _ = wired
         monkeypatch.setenv("CHECKPOINT_DB_HOST", "db.example/db?application_name=hia")
 
-        rag_agent._build_agent()
+        rag_agent.init_rag_agent()
 
         assert pool_cls.call_args.kwargs["conninfo"].endswith(
             "db.example/db?application_name=hia&sslmode=require"
         )
 
-    def test_get_rag_agent_builds_once(self, wired):
-        _, _, build_graph = wired
+    def test_get_before_init_raises(self, wired):
+        with pytest.raises(RuntimeError, match="not initialized"):
+            rag_agent.get_rag_agent()
 
-        first = rag_agent.get_rag_agent()
-        second = rag_agent.get_rag_agent()
+    def test_init_is_idempotent_and_get_returns_it(self, wired):
+        pool_cls, _, build_graph = wired
 
-        assert first is second is build_graph.return_value
-        build_graph.assert_called_once()
+        first = rag_agent.init_rag_agent()
+        second = rag_agent.init_rag_agent()
 
-    def test_cleanup_closes_pool(self, wired):
+        assert first is second is rag_agent.get_rag_agent() is build_graph.return_value
+        pool_cls.assert_called_once()
+
+    def test_close_releases_pool_and_agent(self, wired):
         pool_cls, _, _ = wired
-        rag_agent._build_agent()
+        rag_agent.init_rag_agent()
 
-        rag_agent._cleanup_checkpointer()
+        rag_agent.close_rag_agent()
 
         pool_cls.return_value.close.assert_called_once()
+        with pytest.raises(RuntimeError):
+            rag_agent.get_rag_agent()
+
+    def test_close_without_init_is_a_noop(self, wired):
+        rag_agent.close_rag_agent()
+
+    def test_bad_db_config_fails_at_init(self, wired, monkeypatch):
+        """Startup must surface DB misconfiguration instead of the first chat turn."""
+        pool_cls, _, build_graph = wired
+        pool_cls.side_effect = RuntimeError("connection refused")
+
+        with pytest.raises(RuntimeError, match="connection refused"):
+            rag_agent.init_rag_agent()
+        build_graph.assert_not_called()
 
 
 def test_get_llm_uses_azure_env(monkeypatch):

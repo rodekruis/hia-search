@@ -1,5 +1,4 @@
 from __future__ import annotations
-import atexit
 from langchain_core.documents import Document
 from typing_extensions import Annotated, List
 from langchain_openai import AzureChatOpenAI
@@ -18,8 +17,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Lazy-initialized globals
 _llm = None
+# Set by init_rag_agent() at process startup (FastAPI lifespan), one pool per worker
 _rag_agent = None
 _checkpointer_pool = None
 
@@ -115,15 +114,16 @@ def generate(state: RagState, config: RunnableConfig):
     return {"messages": removals + [response], "retrieved_docs": docs}
 
 
-def _cleanup_checkpointer():
-    """Close the connection pool on shutdown."""
-    if _checkpointer_pool is not None:
-        _checkpointer_pool.close()
+def init_rag_agent():
+    """Open the checkpoint pool and compile the graph; fails fast on bad DB config.
 
+    Must run after fork (per gunicorn worker), so call it from the app lifespan,
+    never at import time.
+    """
+    global _rag_agent, _checkpointer_pool
+    if _rag_agent is not None:
+        return _rag_agent
 
-def _build_agent():
-    """Build and return the RAG agent graph (called once on first use)."""
-    global _checkpointer_pool
     db_user = quote(os.environ["CHECKPOINT_DB_USER"], safe="")
     db_password = quote(os.environ["CHECKPOINT_DB_PASSWORD"], safe="")
     db_host = os.environ["CHECKPOINT_DB_HOST"]
@@ -140,11 +140,20 @@ def _build_agent():
         check=ConnectionPool.check_connection,
         kwargs={"autocommit": True, "prepare_threshold": 0},
     )
-    atexit.register(_cleanup_checkpointer)
 
     checkpointer = PostgresSaver(_checkpointer_pool)
     checkpointer.setup()
-    return build_graph(checkpointer)
+    _rag_agent = build_graph(checkpointer)
+    return _rag_agent
+
+
+def close_rag_agent():
+    """Close the checkpoint pool (app shutdown)."""
+    global _rag_agent, _checkpointer_pool
+    if _checkpointer_pool is not None:
+        _checkpointer_pool.close()
+    _checkpointer_pool = None
+    _rag_agent = None
 
 
 def build_graph(checkpointer):
@@ -168,8 +177,9 @@ def build_graph(checkpointer):
 
 
 def get_rag_agent():
-    """Lazily initialize and return the RAG agent."""
-    global _rag_agent
+    """Return the agent built by init_rag_agent()."""
     if _rag_agent is None:
-        _rag_agent = _build_agent()
+        raise RuntimeError(
+            "RAG agent not initialized; init_rag_agent() must run at startup"
+        )
     return _rag_agent

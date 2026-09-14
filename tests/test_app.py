@@ -1,7 +1,36 @@
-"""Tests for the main FastAPI app (root, models, CORS)."""
+"""Tests for the main FastAPI app (root, models, CORS, lifespan)."""
 
 from __future__ import annotations
 import os
+import sys
+
+import pytest
+from fastapi.testclient import TestClient
+
+from main import app
+
+
+class TestLifespan:
+    def test_agent_initialized_on_startup_and_closed_on_shutdown(self):
+        # conftest replaces agents.rag_agent with a mock; main imported from it
+        rag_agent = sys.modules["agents.rag_agent"]
+        rag_agent.init_rag_agent.reset_mock()
+        rag_agent.close_rag_agent.reset_mock()
+
+        with TestClient(app):
+            rag_agent.init_rag_agent.assert_called_once()
+            rag_agent.close_rag_agent.assert_not_called()
+        rag_agent.close_rag_agent.assert_called_once()
+
+    def test_startup_failure_aborts_boot(self):
+        rag_agent = sys.modules["agents.rag_agent"]
+        rag_agent.init_rag_agent.side_effect = RuntimeError("db down")
+        try:
+            with pytest.raises(RuntimeError, match="db down"):
+                with TestClient(app):
+                    pass
+        finally:
+            rag_agent.init_rag_agent.side_effect = None
 
 
 class TestAppRoot:
