@@ -9,8 +9,7 @@ from fastapi import HTTPException
 
 DEFAULT_PROMPT_PATH = Path(__file__).resolve().parent.parent / "config" / "rag_agent_prompt.txt"
 
-# The sheet is fetched over HTTP; re-reading it on every chat turn is pure latency.
-# Prompt edits in the sheet take effect within this many seconds.
+# Cache the system prompt to reduce latency.
 PROMPT_CACHE_TTL_S = float(os.environ.get("PROMPT_CACHE_TTL_S", "300"))
 _prompt_cache: dict[str, tuple[float, str]] = {}
 

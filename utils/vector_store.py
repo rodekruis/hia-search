@@ -31,9 +31,6 @@ import os
 
 DEFAULT_HUGGING_FACE_MODEL = "sentence-transformers/all-mpnet-base-v2"
 
-# Per-process cache of stores whose index is known to exist. Building a VectorStore
-# is not free: langchain's AzureSearch does a get_index round trip in its constructor,
-# and the existence check is another one.
 _stores: dict[str, VectorStore] = {}
 
 

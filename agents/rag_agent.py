@@ -66,7 +66,6 @@ def retrieve(
 ) -> tuple[str, List[Document]]:
     """Retrieve information related to a query."""
     google_sheet_id = config["configurable"]["googleSheetId"]
-    # existence was verified (and the store cached) by chat() before the graph ran
     vector_store = get_vector_store(google_sheet_id)
     retrieved_docs = vector_store.similarity_search(query, k=10)
     serialized = "\n\n".join(f"Document: {doc.page_content}" for doc in retrieved_docs)
