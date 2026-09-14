@@ -10,6 +10,17 @@ from azure.monitor.opentelemetry.exporter import AzureMonitorLogExporter
 # load environment variables
 load_dotenv()
 
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "prod")
+
+
+class EnvironmentFilter(logging.Filter):
+    """Stamp every record with the deployment environment (App Insights custom dimension)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.environment = ENVIRONMENT
+        return True
+
+
 # Set up logs export to Azure Application Insights
 logger_provider = LoggerProvider()
 set_logger_provider(logger_provider)
@@ -18,15 +29,18 @@ exporter = AzureMonitorLogExporter(
 )
 logger_provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
 
-# Attach OpenTelemetry handler to root logger
+# Filters on handlers (not the root logger) also apply to records propagated
+# from child loggers, i.e. everything the app and libraries emit.
 otel_handler = LoggingHandler()
+otel_handler.addFilter(EnvironmentFilter())
 logging.getLogger().addHandler(otel_handler)
 
 # Attach console handler for stdout output
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setLevel(logging.INFO)
+console_handler.addFilter(EnvironmentFilter())
 console_handler.setFormatter(
-    logging.Formatter("%(asctime)s : %(levelname)s : %(message)s")
+    logging.Formatter("%(asctime)s : %(levelname)s : %(environment)s : %(message)s")
 )
 logging.getLogger().addHandler(console_handler)
 
