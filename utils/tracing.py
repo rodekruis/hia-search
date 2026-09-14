@@ -103,7 +103,7 @@ def observe(
         yield None
         return
     with propagate_attributes(
-        session_id=session_id, user_id=user_id, tags=tags
+        session_id=session_id, user_id=user_id, tags=tags, trace_name=name
     ), client.start_as_current_observation(
         as_type="span", name=name, input=input
     ) as span:

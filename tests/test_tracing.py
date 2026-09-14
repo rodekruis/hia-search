@@ -157,7 +157,9 @@ class TestObserve:
         ) as got:
             assert got is span
 
-        propagate.assert_called_once_with(session_id="t1", user_id="u1", tags=["sheet:s"])
+        propagate.assert_called_once_with(
+            session_id="t1", user_id="u1", tags=["sheet:s"], trace_name="chat-turn"
+        )
         chat_client.start_as_current_observation.assert_called_once_with(
             as_type="span", name="chat-turn", input="q"
         )

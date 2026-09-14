@@ -49,7 +49,7 @@ class SearchPayload(BaseModel):
         description="""Text of the search query""",
     )
     googleSheetId: str = Field(
-        ...,
+        "14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04",
         description="""HIA Google Spreadsheet ID""",
     )
     k: int = Field(

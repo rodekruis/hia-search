@@ -106,9 +106,20 @@ class TestSearch:
         assert body["results"][0]["question"].startswith("[fr]")
         assert body["results"][0]["answer"].startswith("[fr]")
 
-    def test_search_missing_required_field(self, client):
-        """Omitting googleSheetId should return 422."""
+    @patch("routes.search.get_vector_store")
+    def test_search_uses_default_sheet_when_omitted(self, mock_get_vs, client):
+        """googleSheetId is optional; the demo sheet is used when omitted."""
+        mock_get_vs.return_value = _make_vector_store(docs_and_scores=[], all_docs_metadata=[])
+
         resp = client.post("/search", json={"query": "hello"})
+
+        assert resp.status_code == 200
+        mock_get_vs.assert_called_once_with(
+            "14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04", check_if_exists=True
+        )
+
+    def test_search_missing_query_is_rejected(self, client):
+        resp = client.post("/search", json={"googleSheetId": "s"})
         assert resp.status_code == 422
 
     @patch("routes.search.get_vector_store")
@@ -299,7 +310,10 @@ class TestSearchTracing:
         assert resp.status_code == 200
 
         propagate.assert_called_once_with(
-            session_id=None, user_id=None, tags=["sheet:sheetX", "channel:search", "lang:nl"]
+            session_id=None,
+            user_id=None,
+            tags=["sheet:sheetX", "channel:search", "lang:nl"],
+            trace_name="search",
         )
         # input is the query as used for retrieval (English)
         lf_client.start_as_current_observation.assert_called_once_with(

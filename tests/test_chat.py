@@ -722,7 +722,10 @@ class TestChatTracing:
         assert resp.status_code == 200
         assert resp.json()["traceId"] == "trace-abc"
         propagate.assert_called_once_with(
-            session_id="t-9", user_id="t-9", tags=["sheet:sheetX", "channel:dummy", "lang:uk"]
+            session_id="t-9",
+            user_id="t-9",
+            tags=["sheet:sheetX", "channel:dummy", "lang:uk"],
+            trace_name="chat-turn",
         )
         # input is the user's message verbatim, in their language
         lf_client.start_as_current_observation.assert_called_once_with(
