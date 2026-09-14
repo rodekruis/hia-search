@@ -193,7 +193,11 @@ It returns the chatbot's response as JSON. Protected with `API_KEY`.
 
 The `/chat-twilio-webhook` endpoint receives incoming messages from Twilio and responds via SMS/WhatsApp. See [Set up the chat service](#3-set-up-the-chat-service) for configuration.
 
-🔐 This endpoint only accepts requests signed by Twilio: the `X-Twilio-Signature` header is validated against the `TWILIO_AUTH_TOKEN` environment variable (your Twilio account's Auth Token). Requests without a valid signature are rejected with 401.
+🔐 This endpoint only accepts requests signed by Twilio: the `X-Twilio-Signature` header is validated against the Auth Token of the Twilio account bound to the `googleSheetId` in the URL. Configure either:
+* `TWILIO_AUTH_TOKENS`: a JSON object mapping each `googleSheetId` to its Twilio Auth Token, e.g. `{"14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04": "abc123"}`. Instances without an entry are rejected.
+* `TWILIO_AUTH_TOKEN`: a single Auth Token used for all instances (only when `TWILIO_AUTH_TOKENS` is not set).
+
+Requests without a valid signature are rejected with 401.
 
 ### `/delete-vector-store`
 

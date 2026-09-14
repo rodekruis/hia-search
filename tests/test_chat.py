@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from unittest.mock import patch, MagicMock
 import pytest
@@ -399,6 +400,51 @@ class TestChatTwilioWebhook:
 
     def test_twilio_missing_token_rejects(self, client, monkeypatch):
         monkeypatch.delenv("TWILIO_AUTH_TOKEN")
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Hi", "From": "+31612345678"}
+        resp = client.post(
+            "/chat-twilio-webhook",
+            params=params,
+            data=form,
+            headers=_twilio_headers("/chat-twilio-webhook", params, form),
+        )
+        assert resp.status_code == 401
+
+    @patch("routes.chat.get_vector_store")
+    @patch("routes.chat.detect_language", return_value="en")
+    @patch("routes.chat.PromptLoader")
+    @patch("routes.chat.get_rag_agent")
+    def test_twilio_per_instance_tokens(
+        self, mock_get_agent, mock_prompt_loader, mock_detect, mock_vs, client, monkeypatch
+    ):
+        """Each googleSheetId is validated against its own Twilio account token."""
+        mock_prompt_loader.return_value.get_prompt.return_value = "prompt"
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = _make_agent_response("ok")
+        mock_get_agent.return_value = mock_agent
+        monkeypatch.setenv(
+            "TWILIO_AUTH_TOKENS", json.dumps({"sheetA": "tok-A", "sheetB": "tok-B"})
+        )
+        form = {"Body": "Hi", "From": "+31612345678"}
+
+        def post(sheet: str, token: str):
+            params = {"googleSheetId": sheet}
+            return client.post(
+                "/chat-twilio-webhook",
+                params=params,
+                data=form,
+                headers=_twilio_headers("/chat-twilio-webhook", params, form, token),
+            )
+
+        assert post("sheetA", "tok-A").status_code == 200
+        assert post("sheetB", "tok-B").status_code == 200
+        # account A must not be able to drive instance B
+        assert post("sheetB", "tok-A").status_code == 401
+        # sheet without an entry is rejected even though TWILIO_AUTH_TOKEN is set
+        assert post("sheetC", TWILIO_TOKEN).status_code == 401
+
+    def test_twilio_invalid_tokens_json_rejects(self, client, monkeypatch):
+        monkeypatch.setenv("TWILIO_AUTH_TOKENS", "{not json")
         params = {"googleSheetId": "sheet123"}
         form = {"Body": "Hi", "From": "+31612345678"}
         resp = client.post(
