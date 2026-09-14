@@ -24,7 +24,10 @@ _ENV_DEFAULTS = {
     "OPENAI_API_VERSION": "2024-02-01",
     "MODEL_EMBEDDINGS": "text-embedding-ada-002",
     "MODEL_CHAT": "gpt-4",
-    "APPLICATIONINSIGHTS_CONNECTION_STRING": "InstrumentationKey=00000000-0000-0000-0000-000000000000",
+    # empty: App Insights export must stay disabled in tests (never a real key from the shell)
+    "APPLICATIONINSIGHTS_CONNECTION_STRING": "",
+    "LANGFUSE_PUBLIC_KEY": "",
+    "LANGFUSE_SECRET_KEY": "",
     "MSCOGNITIVE_KEY": "fake-cognitive-key",
     "MSCOGNITIVE_LOCATION": "westeurope",
     "TWILIO_AUTH_TOKEN": "test-twilio-token",
@@ -37,7 +40,7 @@ os.environ.update(_ENV_DEFAULTS)
 # Patch heavy modules that connect to external services on import
 # ---------------------------------------------------------------------------
 
-# Mock the Azure Monitor logger so it doesn't try to connect
+# Mock the application logger so tests can assert on what gets logged
 _mock_logger = MagicMock()
 sys.modules.setdefault("utils.logger", MagicMock(logger=_mock_logger))
 

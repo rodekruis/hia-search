@@ -3,6 +3,14 @@
 The Langfuse SDK keeps one process-wide instance per public key; a second
 construction silently returns the first and drops its arguments. Build it once
 in the app lifespan (after fork, per worker) and inject it via get_langfuse().
+
+The client runs on its own OpenTelemetry TracerProvider, isolated from the global
+one that Application Insights uses (utils.telemetry): Langfuse spans carry
+prompts, completions and user text and must never be exported to App Insights;
+HTTP/DB spans must not be exported to Langfuse. Both providers share the OTel
+context, so a Langfuse root span opened inside a FastAPI request has a foreign
+parent; the SDK marks such spans as application roots, which is what
+observation-level evaluators filter on ("Is Root Observation").
 """
 
 from __future__ import annotations
@@ -12,6 +20,7 @@ from contextlib import contextmanager
 from typing import Iterator
 
 from langfuse import Langfuse, propagate_attributes
+from opentelemetry.sdk.trace import TracerProvider
 
 from utils.logger import logger
 
@@ -33,6 +42,8 @@ def init_tracing() -> Langfuse | None:
         secret_key=secret_key,
         base_url=os.environ.get("LANGFUSE_BASE_URL") or None,
         environment=os.environ.get("ENVIRONMENT", "prod"),
+        # never registered as the global provider: keeps content out of App Insights
+        tracer_provider=TracerProvider(),
     )
     return _langfuse
 

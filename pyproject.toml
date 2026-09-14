@@ -9,7 +9,6 @@ authors = [
 ]
 dependencies = [
   "azure-identity",
-  "azure-monitor-opentelemetry-exporter",
   "azure-search-documents",
   "clean-text",
   "fastapi",
@@ -33,6 +32,9 @@ dependencies = [
   "uvicorn",
   "gunicorn>=26.2.0",
   "langfuse>=4,<5",
+  "azure-monitor-opentelemetry>=1.8.10",
+  "opentelemetry-instrumentation-httpx>=0.65b0",
+  "opentelemetry-instrumentation-psycopg>=0.65b0",
 ]
 
 [project.urls]

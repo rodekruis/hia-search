@@ -221,7 +221,22 @@ The Twilio webhook never returns these: if a reply cannot be generated, the user
 
 ### Logging & privacy
 
-Application logs (Azure Application Insights) contain **metadata only**: sheet id, hashed thread id, detected language, whether retrieval was used, message/response lengths, durations and error traces. Every record also carries `environment` (from `ENVIRONMENT`, default `prod`) so dev and prod can be separated in queries. User messages, assistant replies, search queries and phone numbers are never written to application logs. Conversation content is recorded exclusively in the LLM observability tool, with its own access control and retention.
+Application logs (Azure Application Insights) contain **metadata only**: sheet id, hashed thread id, detected language, whether retrieval was used, message/response lengths, durations and error traces. Every record also carries `environment` (from `ENVIRONMENT`, default `prod`) so dev and prod can be separated in queries. User messages, replies, search queries and phone numbers are never written to application logs. Conversation content is recorded exclusively in Langfuse (see below), with its own access control and retention.
+
+### Application Insights (infrastructure telemetry)
+
+Set `APPLICATIONINSIGHTS_CONNECTION_STRING` to export via the [Azure Monitor OpenTelemetry distro](https://learn.microsoft.com/azure/azure-monitor/app/opentelemetry-enable?tabs=python) (unset = console logging only). Besides logs you get, with no code in the handlers:
+
+* `requests`: one row per HTTP request (route, status, duration), `/health` excluded.
+* `dependencies`: one row per outbound call — Azure OpenAI, Azure AI Search, the Postgres checkpoint store, Cognitive Services, Google Sheets — so a slow turn can be broken down per stage.
+* `exceptions`, and log↔request correlation via `operation_Id`.
+
+Requests and dependencies carry the `environment` custom dimension as well; the resource is `service.name = hia-search`.
+
+Application Insights and Langfuse run on **separate OpenTelemetry tracer providers**: Langfuse spans (which carry prompts, completions and user text) are never exported to Application Insights, and HTTP/DB spans are never exported to Langfuse. Both share one trace id per request, so a Langfuse trace and its App Insights waterfall can be matched by id.
+
+> [!NOTE]
+> On Azure App Service, disable the built-in auto-instrumentation (`ApplicationInsightsAgent_EXTENSION_VERSION=disabled`) so telemetry is not collected twice.
 
 ### Observability & evaluation (Langfuse)
 

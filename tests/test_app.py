@@ -35,6 +35,20 @@ class TestLifespan:
             shutdown.assert_not_called()
         shutdown.assert_called_once()
 
+    def test_telemetry_configured_before_langfuse_and_agent(self, monkeypatch):
+        """App Insights must own the global TracerProvider before Langfuse and psycopg start."""
+        import main as main_module
+
+        order = []
+        monkeypatch.setattr(main_module, "configure_telemetry", lambda: order.append("telemetry"))
+        monkeypatch.setattr(main_module, "init_tracing", lambda: order.append("langfuse"))
+        monkeypatch.setattr(main_module, "init_rag_agent", lambda: order.append("agent"))
+
+        with TestClient(app):
+            pass
+
+        assert order == ["telemetry", "langfuse", "agent"]
+
     def test_startup_failure_aborts_boot(self):
         rag_agent = sys.modules["agents.rag_agent"]
         rag_agent.init_rag_agent.side_effect = RuntimeError("db down")
