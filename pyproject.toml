@@ -21,6 +21,7 @@ dependencies = [
   "langgraph-checkpoint-postgres",
   "orjson",
   "pandas",
+  "psycopg[binary]",
   "psycopg-pool",
   "python-dotenv",
   "python-multipart",

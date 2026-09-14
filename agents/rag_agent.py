@@ -12,6 +12,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
 import os
+from urllib.parse import quote
 from utils.vector_store import get_vector_store
 from dotenv import load_dotenv
 
@@ -127,7 +128,11 @@ def _cleanup_checkpointer():
 def _build_agent():
     """Build and return the RAG agent graph (called once on first use)."""
     global _checkpointer_pool
-    db_uri = f'postgresql://{os.environ["CHECKPOINT_DB_USER"]}:{os.environ["CHECKPOINT_DB_PASSWORD"]}@{os.environ["CHECKPOINT_DB_HOST"]}'
+    db_user = quote(os.environ["CHECKPOINT_DB_USER"], safe="")
+    db_password = quote(os.environ["CHECKPOINT_DB_PASSWORD"], safe="")
+    db_host = os.environ["CHECKPOINT_DB_HOST"]
+    separator = "&" if "?" in db_host else "?"
+    db_uri = f"postgresql://{db_user}:{db_password}@{db_host}{separator}sslmode=require"
 
     # Use a connection pool that validates connections on checkout so that
     # stale/closed connections (idle timeouts, DB restarts, network blips)
