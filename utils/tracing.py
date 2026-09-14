@@ -15,6 +15,7 @@ observation-level evaluators filter on ("Is Root Observation").
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import contextmanager
 from typing import Iterator
@@ -22,7 +23,7 @@ from typing import Iterator
 from langfuse import Langfuse, propagate_attributes
 from opentelemetry.sdk.trace import TracerProvider
 
-from utils.logger import logger
+logger = logging.getLogger(__name__)
 
 _langfuse: Langfuse | None = None
 

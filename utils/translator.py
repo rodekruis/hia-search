@@ -1,8 +1,10 @@
+import logging
 import requests
 import os
 from dotenv import load_dotenv
 import pandas as pd
-from utils.logger import logger
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 

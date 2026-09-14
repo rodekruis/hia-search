@@ -23,11 +23,13 @@ from azure.search.documents.indexes.models import (
     VectorSearchAlgorithmMetric,
     VectorSearchProfile,
 )
-from utils.logger import logger
 from utils.constants import DocumentMetadata
 from utils.document_loader import DocumentLoader
 from utils.document_chunker import DocumentChunker
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_HUGGING_FACE_MODEL = "sentence-transformers/all-mpnet-base-v2"
 

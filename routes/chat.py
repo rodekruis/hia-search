@@ -7,13 +7,15 @@ from pydantic import BaseModel, Field
 from utils.vector_store import get_vector_store
 from agents.rag_agent import get_rag_agent
 from utils.auth import require_read_key, require_twilio_signature
-from utils.logger import logger
 from utils.messaging import number_chunks, split_message
 from utils.prompt_loader import get_system_prompt
 import hashlib
+import logging
 import uuid
 from time import perf_counter
 from utils.translator import translate, detect_language
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 

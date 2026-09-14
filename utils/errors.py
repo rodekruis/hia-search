@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import logging
+
 from azure.core.exceptions import AzureError
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from openai import OpenAIError
 from psycopg import Error as PsycopgError
 
-from utils.logger import logger
+logger = logging.getLogger(__name__)
 
 # Upstream failures we cannot recover from: surfaced as 502 without leaking details
 EXTERNAL_SERVICE_ERRORS = (OpenAIError, AzureError, PsycopgError)

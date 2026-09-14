@@ -244,11 +244,10 @@ class TestSearch:
         mock_get_vs.assert_called_once_with("s", check_if_exists=True)
 
     @patch("routes.search.get_vector_store")
-    def test_query_text_is_not_logged(self, mock_get_vs, client):
-        import sys
+    def test_query_text_is_not_logged(self, mock_get_vs, client, caplog):
+        import logging
 
-        app_logger = sys.modules["utils.logger"].logger
-        app_logger.reset_mock()
+        caplog.set_level(logging.INFO)
         meta = {
             "categoryID": 1, "subcategoryID": 1, "slug": "", "parent": None,
             "question": "Q", "answer": "A", "google_index": "QnAs1",
@@ -259,10 +258,10 @@ class TestSearch:
 
         client.post("/search", json={"query": "hiv test anonymous", "googleSheetId": "s", "k": 3})
 
-        logged = " ".join(f"{c.args} {c.kwargs}" for c in app_logger.mock_calls)
+        logged = " ".join(f"{r.getMessage()} {r.__dict__}" for r in caplog.records)
         assert "hiv test anonymous" not in logged
-        entry = next(c for c in app_logger.info.call_args_list if c.args[0] == "search")
-        assert entry.kwargs["extra"] == {
+        entry = next(r for r in caplog.records if r.getMessage() == "search").__dict__
+        assert {k: entry[k] for k in ("googleSheetId", "lang", "k", "query_chars", "n_results")} == {
             "googleSheetId": "s", "lang": "en", "k": 3, "query_chars": 18, "n_results": 1
         }
 

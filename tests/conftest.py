@@ -40,10 +40,6 @@ os.environ.update(_ENV_DEFAULTS)
 # Patch heavy modules that connect to external services on import
 # ---------------------------------------------------------------------------
 
-# Mock the application logger so tests can assert on what gets logged
-_mock_logger = MagicMock()
-sys.modules.setdefault("utils.logger", MagicMock(logger=_mock_logger))
-
 # Mock the rag_agent module so it doesn't connect to PostgreSQL / OpenAI
 _mock_rag_agent = MagicMock()
 _mock_get_rag_agent = MagicMock(return_value=_mock_rag_agent)

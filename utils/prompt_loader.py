@@ -1,11 +1,13 @@
+import logging
 import os
 import time
 import urllib
 from pathlib import Path
 
 import pandas as pd
-from utils.logger import logger
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PROMPT_PATH = Path(__file__).resolve().parent.parent / "config" / "rag_agent_prompt.txt"
 

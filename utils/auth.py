@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 
@@ -8,7 +9,7 @@ from fastapi import HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
 from twilio.request_validator import RequestValidator
 
-from utils.logger import logger
+logger = logging.getLogger(__name__)
 
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 

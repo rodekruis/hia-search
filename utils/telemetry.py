@@ -23,7 +23,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import SpanProcessor
 
-from utils.logger import logger
+logger = logging.getLogger(__name__)
 
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "prod")
 SERVICE_NAME = "hia-search"

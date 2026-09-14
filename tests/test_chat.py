@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from unittest.mock import patch, MagicMock
 import pytest
@@ -21,20 +22,19 @@ READ_KEY_HEADER = {"Authorization": "test-api-key"}
 TWILIO_TOKEN = "test-twilio-token"
 
 
-def _logged_text(mock_logger) -> str:
-    """Everything that reached the (mocked) application logger, flattened."""
-    return " ".join(
-        f"{call.args} {call.kwargs}" for call in mock_logger.mock_calls
-    )
+def _logged_text(caplog) -> str:
+    """Everything that reached the application loggers, messages and extra fields alike."""
+    return " ".join(f"{r.getMessage()} {r.__dict__}" for r in caplog.records)
+
+
+def _record(caplog, message: str) -> logging.LogRecord:
+    return next(r for r in caplog.records if r.getMessage() == message)
 
 
 @pytest.fixture()
-def app_logger():
-    import sys
-
-    mock_logger = sys.modules["utils.logger"].logger
-    mock_logger.reset_mock()
-    return mock_logger
+def app_logger(caplog):
+    caplog.set_level(logging.INFO)
+    return caplog
 
 
 @pytest.fixture()
@@ -350,15 +350,14 @@ class TestChatDummy:
         assert bot_text not in logged
         assert "d1" not in logged
 
-        turn = next(c for c in app_logger.info.call_args_list if c.args[0] == "chat turn")
-        extra = turn.kwargs["extra"]
-        assert extra["googleSheetId"] == "sheet123"
-        assert extra["threadId"] == "t-1"
-        assert extra["detected_lang"] == "uk"
-        assert extra["retrieval_used"] is True and extra["n_docs"] == 2
-        assert extra["message_chars"] == len(user_text)
-        assert extra["response_chars"] == len(bot_text)
-        assert isinstance(extra["duration_ms"], int)
+        turn = _record(app_logger, "chat turn").__dict__
+        assert turn["googleSheetId"] == "sheet123"
+        assert turn["threadId"] == "t-1"
+        assert turn["detected_lang"] == "uk"
+        assert turn["retrieval_used"] is True and turn["n_docs"] == 2
+        assert turn["message_chars"] == len(user_text)
+        assert turn["response_chars"] == len(bot_text)
+        assert isinstance(turn["duration_ms"], int)
 
 
 # ---------------------------------------------------------------------------
@@ -419,11 +418,9 @@ class TestChatTwilioWebhook:
         assert "Where do I register?" not in logged
         assert "Go to the town hall." not in logged
         assert "31612345678" not in logged
-        reply = next(c for c in app_logger.info.call_args_list if c.args[0] == "twilio reply")
-        assert reply.kwargs["extra"]["n_chunks"] == 1
-        assert reply.kwargs["extra"]["threadId"] == hashlib.sha256(
-            b"whatsapp:+31612345678"
-        ).hexdigest()
+        reply = _record(app_logger, "twilio reply").__dict__
+        assert reply["n_chunks"] == 1
+        assert reply["threadId"] == hashlib.sha256(b"whatsapp:+31612345678").hexdigest()
 
     @patch("routes.chat.get_vector_store")
     @patch("routes.chat.detect_language", return_value="en")

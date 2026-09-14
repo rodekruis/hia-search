@@ -7,12 +7,14 @@ from pydantic import BaseModel, Field
 from utils.vector_store import get_vector_store
 from utils.constants import DocumentMetadata
 import json
-from utils.logger import logger
+import logging
 import orjson
 from typing import Any
 from utils.translator import translate
 from utils.tracing import observe
 import os
+
+logger = logging.getLogger(__name__)
 
 dm = DocumentMetadata()
 

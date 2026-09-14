@@ -1,11 +1,13 @@
 import copy
+import logging
 from typing import List
 import re
 
 from langchain_core.documents import Document
 from langchain_text_splitters import SpacyTextSplitter
-from utils.logger import logger
 from utils.constants import DocumentMetadata
+
+logger = logging.getLogger(__name__)
 
 
 dm = DocumentMetadata()

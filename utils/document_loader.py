@@ -1,15 +1,17 @@
 from typing import List
 
+import logging
 import urllib
 from langchain_core.documents import Document
 import pandas as pd
 from utils.constants import DocumentMetadata
-from utils.logger import logger
 from langchain_community.document_loaders import DataFrameLoader
 import uuid
 from fastapi import HTTPException
 from cleantext import clean
 from utils.translator import translate, detect_language
+
+logger = logging.getLogger(__name__)
 
 dm = DocumentMetadata()
 
