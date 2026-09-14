@@ -10,6 +10,7 @@ from routes import search, data, chat
 from agents.rag_agent import init_rag_agent, close_rag_agent
 from utils.errors import register_exception_handlers
 from utils.middleware import RequestIdMiddleware
+from utils.tracing import init_tracing, shutdown_tracing
 import os
 from dotenv import load_dotenv
 
@@ -53,7 +54,9 @@ async def lifespan(app: FastAPI):
     # Runs once per worker process: the first user must not pay for pool setup,
     # and a bad DB config must fail the boot instead of the first chat turn.
     init_rag_agent()
+    init_tracing()
     yield
+    shutdown_tracing()
     close_rag_agent()
 
 

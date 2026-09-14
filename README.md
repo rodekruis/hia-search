@@ -223,6 +223,20 @@ The Twilio webhook never returns these: if a reply cannot be generated, the user
 
 Application logs (Azure Application Insights) contain **metadata only**: sheet id, hashed thread id, detected language, whether retrieval was used, message/response lengths, durations and error traces. User messages, assistant replies, search queries and phone numbers are never written to application logs. Conversation content is recorded exclusively in the LLM observability tool, with its own access control and retention.
 
+### Observability & evaluation (Langfuse)
+
+Set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` to enable tracing (unset = disabled; `LANGFUSE_BASE_URL` for self-hosted/US cloud, `ENVIRONMENT` namespaces traces).
+
+Each `/search` request is one root span named `search`, tagged `sheet:<googleSheetId>`, `channel:search`, `lang:<lang>`:
+
+* `input`: the query as used for retrieval (English)
+* `output`: the retrieved Q&As as a numbered `[n] Q: … A: …` block
+* `metadata.search_query`, `metadata.retrieved_context`: same content, under the keys the chat traces will use, so one evaluator mapping serves both channels
+* `metadata.original_query`, `lang`, `k`, `n_results`, `top_score`
+* scores `top_score` (numeric), `n_results` (numeric), `zero_results` (boolean), written by the app
+
+Configure an **observation-level** evaluator on observations named `search` (filter *Is Root Observation*), mapping `{{query}}` → Metadata `$.search_query` and `{{context}}` → Metadata `$.retrieved_context`. Use the rule filters (e.g. `top_score` below a threshold, or `zero_results = true`, plus a small random sample) to run LLM judges only on searches worth reviewing; a boolean "is the question answered by any of these Q&As?" judge yields the missing-content list per sheet.
+
 ## Configuration
 
 ```sh

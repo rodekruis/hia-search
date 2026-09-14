@@ -265,3 +265,84 @@ class TestSearch:
         assert entry.kwargs["extra"] == {
             "googleSheetId": "s", "lang": "en", "k": 3, "query_chars": 18, "n_results": 1
         }
+
+
+class TestSearchTracing:
+    """The search root span carries everything an observation-level evaluator needs."""
+
+    @pytest.fixture()
+    def span(self, monkeypatch):
+        import utils.tracing as tracing
+
+        client = MagicMock()
+        span = MagicMock(name="span")
+        client.start_as_current_observation.return_value.__enter__.return_value = span
+        monkeypatch.setattr(tracing, "_langfuse", client)
+        monkeypatch.setattr(tracing, "propagate_attributes", MagicMock())
+        return span, client, tracing.propagate_attributes
+
+    @patch("routes.search.translate")
+    @patch("routes.search.get_vector_store")
+    def test_span_has_evaluator_fields_and_scores(self, mock_get_vs, mock_translate, client, span):
+        span, lf_client, propagate = span
+        mock_translate.side_effect = lambda from_lang, to_lang, text: f"[{to_lang}]{text}"
+        m1 = {"categoryID": 1, "subcategoryID": 1, "slug": "", "parent": None,
+              "question": "Where is the GP?", "answer": "Main street.", "google_index": "QnAs1"}
+        m2 = {**m1, "question": "Emergency?", "answer": "Call 112.", "google_index": "QnAs2"}
+        mock_get_vs.return_value = _make_vector_store(
+            docs_and_scores=[(_make_doc(m1), 0.81), (_make_doc(m2), 0.42)],
+            all_docs_metadata=[m1, m2],
+        )
+
+        resp = client.post(
+            "/search", json={"query": "dokter", "googleSheetId": "sheetX", "lang": "nl", "k": 2}
+        )
+        assert resp.status_code == 200
+
+        propagate.assert_called_once_with(
+            session_id=None, user_id=None, tags=["sheet:sheetX", "channel:search", "lang:nl"]
+        )
+        # input is the query as used for retrieval (English)
+        lf_client.start_as_current_observation.assert_called_once_with(
+            as_type="span", name="search", input="[en]dokter"
+        )
+        update = span.update.call_args.kwargs
+        context = "[1] Q: Where is the GP?\nA: Main street.\n\n[2] Q: Emergency?\nA: Call 112."
+        assert update["output"] == context
+        assert update["metadata"] == {
+            "search_query": "[en]dokter",
+            "retrieved_context": context,
+            "original_query": "dokter",
+            "lang": "nl",
+            "k": 2,
+            "n_results": 2,
+            "top_score": 0.81,
+        }
+        scores = {c.kwargs["name"]: c.kwargs for c in span.score.call_args_list}
+        assert scores["top_score"]["value"] == 0.81
+        assert scores["n_results"]["value"] == 2.0
+        assert scores["zero_results"]["value"] is False
+        assert scores["zero_results"]["data_type"] == "BOOLEAN"
+
+    @patch("routes.search.get_vector_store")
+    def test_zero_results_scored(self, mock_get_vs, client, span):
+        span, _, _ = span
+        mock_get_vs.return_value = _make_vector_store(docs_and_scores=[], all_docs_metadata=[])
+
+        resp = client.post("/search", json={"query": "nothing", "googleSheetId": "s"})
+
+        assert resp.status_code == 200 and resp.json()["results"] == []
+        update = span.update.call_args.kwargs
+        assert update["output"] == "" and update["metadata"]["top_score"] == 0.0
+        scores = {c.kwargs["name"]: c.kwargs["value"] for c in span.score.call_args_list}
+        assert scores == {"top_score": 0.0, "n_results": 0.0, "zero_results": True}
+
+    @patch("routes.search.get_vector_store")
+    def test_search_works_without_tracing(self, mock_get_vs, client):
+        meta = {"categoryID": 1, "subcategoryID": 1, "slug": "", "parent": None,
+                "question": "Q", "answer": "A", "google_index": "QnAs1"}
+        mock_get_vs.return_value = _make_vector_store(
+            docs_and_scores=[(_make_doc(meta), 0.9)], all_docs_metadata=[meta]
+        )
+        resp = client.post("/search", json={"query": "q", "googleSheetId": "s"})
+        assert resp.status_code == 200 and len(resp.json()["results"]) == 1

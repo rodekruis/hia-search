@@ -11,6 +11,7 @@ from utils.logger import logger
 import orjson
 from typing import Any
 from utils.translator import translate
+from utils.tracing import observe
 import os
 
 dm = DocumentMetadata()
@@ -63,28 +64,8 @@ class SearchPayload(BaseModel):
     )
 
 
-@router.post("/search", tags=["search"])
-async def search(payload: SearchPayload):
-    """Search HIA."""
-
-    if payload.source not in ["Q&As"]:
-        raise HTTPException(status_code=400, detail="Invalid source; must be 'Q&As'")
-
-    # load vector store
-    vector_store = get_vector_store(payload.googleSheetId, check_if_exists=True)
-
-    # translate if necessary
-    if payload.lang != "en":
-        payload.query = translate(
-            from_lang=payload.lang, to_lang="en", text=payload.query
-        )
-
-    # retrieve documents
-    docs_and_scores = vector_store.similarity_search_with_score(
-        query=payload.query, k=payload.k
-    )
-
-    # build results they way HIA likes them
+def _build_results(docs_and_scores, vector_store) -> list[dict]:
+    """Build results the way HIA likes them: parents with children, children promoted to their parent."""
     df = pd.DataFrame.from_records(
         [
             json.loads(doc["metadata"], strict=False)
@@ -167,6 +148,67 @@ async def search(payload: SearchPayload):
     # remove google_index from results
     for result in results:
         result.pop(dm.GOOGLE_INDEX)
+    return results
+
+
+def _retrieved_context(docs_and_scores) -> str:
+    """Numbered Q&A block, same shape as the chat-turn span's `retrieved_context`."""
+    return "\n\n".join(
+        f"[{index}] Q: {doc.metadata[dm.QUESTION]}\nA: {doc.metadata[dm.ANSWER]}"
+        for index, (doc, _score) in enumerate(docs_and_scores, start=1)
+    )
+
+
+def _record_search(span, payload: SearchPayload, original_query: str, docs_and_scores, results) -> None:
+    """Write everything an observation-level evaluator needs onto the root span."""
+    context = _retrieved_context(docs_and_scores)
+    top_score = max((score for _doc, score in docs_and_scores), default=0.0)
+    span.update(
+        output=context,
+        metadata={
+            # same keys as chat-turn so one evaluator mapping serves both channels
+            "search_query": payload.query,
+            "retrieved_context": context,
+            "original_query": original_query,
+            "lang": payload.lang,
+            "k": payload.k,
+            "n_results": len(results),
+            "top_score": top_score,
+        },
+    )
+    # cheap deterministic scores: pre-filter for LLM judges and trendable on their own
+    span.score(name="top_score", value=float(top_score), data_type="NUMERIC")
+    span.score(name="n_results", value=float(len(results)), data_type="NUMERIC")
+    span.score(name="zero_results", value=len(results) == 0, data_type="BOOLEAN")
+
+
+# Plain `def`: embedding, search and translation are blocking HTTP calls and must
+# run in the threadpool, not on the event loop.
+@router.post("/search", tags=["search"])
+def search(payload: SearchPayload):
+    """Search HIA."""
+
+    if payload.source not in ["Q&As"]:
+        raise HTTPException(status_code=400, detail="Invalid source; must be 'Q&As'")
+
+    # load vector store
+    vector_store = get_vector_store(payload.googleSheetId, check_if_exists=True)
+
+    # translate if necessary
+    original_query = payload.query
+    if payload.lang != "en":
+        payload.query = translate(
+            from_lang=payload.lang, to_lang="en", text=payload.query
+        )
+
+    tags = [f"sheet:{payload.googleSheetId}", "channel:search", f"lang:{payload.lang}"]
+    with observe("search", input=payload.query, tags=tags) as span:
+        docs_and_scores = vector_store.similarity_search_with_score(
+            query=payload.query, k=payload.k
+        )
+        results = _build_results(docs_and_scores, vector_store)
+        if span is not None:
+            _record_search(span, payload, original_query, docs_and_scores, results)
 
     # translate results if necessary
     if payload.lang != "en":

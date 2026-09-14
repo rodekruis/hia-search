@@ -6,6 +6,7 @@ import sys
 
 import pytest
 from fastapi.testclient import TestClient
+from unittest.mock import MagicMock
 
 from main import app
 
@@ -21,6 +22,18 @@ class TestLifespan:
             rag_agent.init_rag_agent.assert_called_once()
             rag_agent.close_rag_agent.assert_not_called()
         rag_agent.close_rag_agent.assert_called_once()
+
+    def test_tracing_initialized_and_shut_down(self, monkeypatch):
+        import main as main_module
+
+        init, shutdown = MagicMock(), MagicMock()
+        monkeypatch.setattr(main_module, "init_tracing", init)
+        monkeypatch.setattr(main_module, "shutdown_tracing", shutdown)
+
+        with TestClient(app):
+            init.assert_called_once()
+            shutdown.assert_not_called()
+        shutdown.assert_called_once()
 
     def test_startup_failure_aborts_boot(self):
         rag_agent = sys.modules["agents.rag_agent"]
