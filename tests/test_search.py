@@ -276,7 +276,7 @@ class TestSearchTracing:
         client = MagicMock()
         span = MagicMock(name="span")
         client.start_as_current_observation.return_value.__enter__.return_value = span
-        monkeypatch.setattr(tracing, "_langfuse", client)
+        monkeypatch.setattr(tracing, "_clients", {"search": client})
         monkeypatch.setattr(tracing, "propagate_attributes", MagicMock())
         return span, client, tracing.propagate_attributes
 

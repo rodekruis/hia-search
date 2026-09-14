@@ -240,17 +240,37 @@ Application Insights and Langfuse run on **separate OpenTelemetry tracer provide
 
 ### Observability & evaluation (Langfuse)
 
-Set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` to enable tracing (unset = disabled; `LANGFUSE_BASE_URL` for self-hosted/US cloud, `ENVIRONMENT` namespaces traces).
+Search and chat are traced into **two separate Langfuse projects** (distinct keys, same `LANGFUSE_BASE_URL`): `LANGFUSE_SEARCH_PUBLIC_KEY`/`LANGFUSE_SEARCH_SECRET_KEY` and `LANGFUSE_CHAT_PUBLIC_KEY`/`LANGFUSE_CHAT_SECRET_KEY`. A project whose keys are unset is simply not traced. `ENVIRONMENT` namespaces traces in both.
+
+#### Search
 
 Each `/search` request is one root span named `search`, tagged `sheet:<googleSheetId>`, `channel:search`, `lang:<lang>`:
 
 * `input`: the query as used for retrieval (English)
 * `output`: the retrieved Q&As as a numbered `[n] Q: … A: …` block
-* `metadata.search_query`, `metadata.retrieved_context`: same content, under the keys the chat traces will use, so one evaluator mapping serves both channels
+* `metadata.search_query`, `metadata.retrieved_context`: same content, under the keys the chat traces use, so one evaluator mapping serves both channels
 * `metadata.original_query`, `lang`, `k`, `n_results`, `top_score`
 * scores `top_score` (numeric), `n_results` (numeric), `zero_results` (boolean), written by the app
 
-Configure an **observation-level** evaluator on observations named `search` (filter *Is Root Observation*), mapping `{{query}}` → Metadata `$.search_query` and `{{context}}` → Metadata `$.retrieved_context`. Use the rule filters (e.g. `top_score` below a threshold, or `zero_results = true`, plus a small random sample) to run LLM judges only on searches worth reviewing; a boolean "is the question answered by any of these Q&As?" judge yields the missing-content list per sheet.
+#### Chat
+
+Each chat turn (`/chat-dummy`, `/chat-twilio-webhook`) is one root span named `chat-turn`, with `session_id` = `user_id` = the thread id (hashed sender on Twilio), tagged `sheet:<googleSheetId>`, `channel:twilio|dummy`, `lang:<detected>`. The LangGraph steps (`query_or_respond`, `tools`, `generate`) nest underneath with model, tokens and cost.
+
+* `input`: the user's message verbatim, in their language; `output`: the reply as sent to the user
+* `metadata.retrieval_used`, `n_docs`, `detected_lang`
+* `metadata.message_en`, `metadata.answer_en`: the English text the model actually saw and produced, for judges that should not compare across languages
+* `metadata.retrieved_context` (the documents exactly as fed to the model) and `metadata.search_query` (the query the model wrote for retrieval), present only when `retrieval_used` is true
+* `metadata.conversation_history`: prior turns as a plain transcript, current turn excluded
+
+`/chat-dummy` returns `traceId`; `POST /feedback` `{"traceId": ..., "positive": true|false, "comment": ...}` (read key) records it as a `user-feedback` score (1/0) on that trace. It returns 503 when chat tracing is disabled.
+
+#### Evaluators
+
+Configure **observation-level** evaluators (filter *Is Root Observation*; trace-level evaluators are deprecated):
+
+* Retrieval quality / missing content, both projects: `{{query}}` → Metadata `$.search_query`, `{{context}}` → Metadata `$.retrieved_context`. On chat, filter `metadata.retrieval_used = true` so small talk is skipped. Use rule filters (`top_score` below a threshold or `zero_results = true` on search, plus a small random sample) to run LLM judges only where it pays; a boolean "is the question answered by any of these documents?" judge yields the missing-content list per sheet.
+* Faithfulness on chat: `{{answer}}` → Metadata `$.answer_en`, `{{context}}` → Metadata `$.retrieved_context`, `{{question}}` → Metadata `$.search_query`.
+* User-facing judges (e.g. distress detection) on chat: `{{history}}` → Metadata `$.conversation_history`, `{{message}}` → Input.
 
 ## Configuration
 

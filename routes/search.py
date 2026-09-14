@@ -204,7 +204,7 @@ def search(payload: SearchPayload):
         )
 
     tags = [f"sheet:{payload.googleSheetId}", "channel:search", f"lang:{payload.lang}"]
-    with observe("search", input=payload.query, tags=tags) as span:
+    with observe("search", project="search", input=payload.query, tags=tags) as span:
         docs_and_scores = vector_store.similarity_search_with_score(
             query=payload.query, k=payload.k
         )

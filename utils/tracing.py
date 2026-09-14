@@ -25,20 +25,22 @@ from opentelemetry.sdk.trace import TracerProvider
 
 logger = logging.getLogger(__name__)
 
-_langfuse: Langfuse | None = None
+# Search and chat are separate Langfuse projects (distinct keys, same base URL).
+# Each client gets its own isolated TracerProvider, so routing is by provider,
+# not by the SDK's experimental public-key attribute matching.
+PROJECTS = ("search", "chat")
+_clients: dict[str, Langfuse] = {}
+_public_keys: dict[str, str] = {}
 
 
-def init_tracing() -> Langfuse | None:
-    """Create the shared client, or leave tracing disabled when keys are missing."""
-    global _langfuse
-    if _langfuse is not None:
-        return _langfuse
-    public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
-    secret_key = os.environ.get("LANGFUSE_SECRET_KEY")
+def _build_client(project: str) -> tuple[Langfuse, str] | None:
+    prefix = f"LANGFUSE_{project.upper()}"
+    public_key = os.environ.get(f"{prefix}_PUBLIC_KEY")
+    secret_key = os.environ.get(f"{prefix}_SECRET_KEY")
     if not (public_key and secret_key):
-        logger.info("Langfuse keys not set; tracing disabled")
+        logger.info("%s keys not set; Langfuse tracing disabled for %s", prefix, project)
         return None
-    _langfuse = Langfuse(
+    client = Langfuse(
         public_key=public_key,
         secret_key=secret_key,
         base_url=os.environ.get("LANGFUSE_BASE_URL") or None,
@@ -46,25 +48,46 @@ def init_tracing() -> Langfuse | None:
         # never registered as the global provider: keeps content out of App Insights
         tracer_provider=TracerProvider(),
     )
-    return _langfuse
+    return client, public_key
+
+
+def init_tracing() -> dict[str, Langfuse]:
+    """Create one client per configured project; unconfigured projects stay untraced."""
+    for project in PROJECTS:
+        if project not in _clients:
+            built = _build_client(project)
+            if built is not None:
+                _clients[project], _public_keys[project] = built
+    return dict(_clients)
 
 
 def shutdown_tracing() -> None:
-    """Flush pending events and release the client."""
-    global _langfuse
-    if _langfuse is not None:
-        _langfuse.shutdown()
-    _langfuse = None
+    """Flush pending events and release the clients."""
+    for client in _clients.values():
+        client.shutdown()
+    _clients.clear()
+    _public_keys.clear()
 
 
-def get_langfuse() -> Langfuse | None:
-    return _langfuse
+def get_langfuse(project: str) -> Langfuse | None:
+    return _clients.get(project)
+
+
+def langchain_callbacks(project: str) -> list:
+    """LangChain callbacks that nest LLM/tool spans under the current root span."""
+    if project not in _clients:
+        return []
+    from langfuse.langchain import CallbackHandler
+
+    # the public key selects the project's client, and with it its isolated provider
+    return [CallbackHandler(public_key=_public_keys[project])]
 
 
 @contextmanager
 def observe(
     name: str,
     *,
+    project: str,
     input: object,
     tags: list[str],
     session_id: str | None = None,
@@ -75,7 +98,7 @@ def observe(
     Everything an evaluator needs must be written onto this span (input,
     output, metadata): observation-level evaluators do not see children.
     """
-    client = _langfuse
+    client = _clients.get(project)
     if client is None:
         yield None
         return

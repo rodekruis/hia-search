@@ -26,8 +26,10 @@ _ENV_DEFAULTS = {
     "MODEL_CHAT": "gpt-4",
     # empty: App Insights export must stay disabled in tests (never a real key from the shell)
     "APPLICATIONINSIGHTS_CONNECTION_STRING": "",
-    "LANGFUSE_PUBLIC_KEY": "",
-    "LANGFUSE_SECRET_KEY": "",
+    "LANGFUSE_SEARCH_PUBLIC_KEY": "",
+    "LANGFUSE_SEARCH_SECRET_KEY": "",
+    "LANGFUSE_CHAT_PUBLIC_KEY": "",
+    "LANGFUSE_CHAT_SECRET_KEY": "",
     "MSCOGNITIVE_KEY": "fake-cognitive-key",
     "MSCOGNITIVE_LOCATION": "westeurope",
     "TWILIO_AUTH_TOKEN": "test-twilio-token",
@@ -43,7 +45,14 @@ os.environ.update(_ENV_DEFAULTS)
 # Mock the rag_agent module so it doesn't connect to PostgreSQL / OpenAI
 _mock_rag_agent = MagicMock()
 _mock_get_rag_agent = MagicMock(return_value=_mock_rag_agent)
-sys.modules.setdefault("agents.rag_agent", MagicMock(get_rag_agent=_mock_get_rag_agent))
+sys.modules.setdefault(
+    "agents.rag_agent",
+    MagicMock(
+        get_rag_agent=_mock_get_rag_agent,
+        # pure helper, mirrored here so route tests see the real context format
+        format_context=lambda docs: "\n\n".join(f"Document: {d.page_content}" for d in docs),
+    ),
+)
 
 # ---------------------------------------------------------------------------
 # Now it's safe to import the FastAPI app

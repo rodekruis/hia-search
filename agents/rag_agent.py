@@ -29,6 +29,13 @@ class RagState(MessagesState):
     """Conversation state: `messages` holds only human/AI turns; docs live apart."""
 
     retrieved_docs: List[Document]
+    # the query the model wrote for the retrieve tool this turn ("" when no retrieval)
+    search_query: str
+
+
+def format_context(docs: List[Document]) -> str:
+    """The retrieved documents exactly as they are fed to the model."""
+    return "\n\n".join(f"Document: {doc.page_content}" for doc in docs)
 
 
 def _get_llm():
@@ -68,8 +75,7 @@ def retrieve(
     google_sheet_id = config["configurable"]["googleSheetId"]
     vector_store = get_vector_store(google_sheet_id)
     retrieved_docs = vector_store.similarity_search(query, k=10)
-    serialized = "\n\n".join(f"Document: {doc.page_content}" for doc in retrieved_docs)
-    return serialized, retrieved_docs
+    return format_context(retrieved_docs), retrieved_docs
 
 
 # Define retrieve-or-respond node
@@ -80,8 +86,8 @@ def query_or_respond(state: RagState, config: RunnableConfig) -> dict:
     response = llm_with_tools.invoke(prompt)
 
     # MessagesState appends messages to state instead of overwriting;
-    # retrieved_docs is reset so a direct answer never reports stale context.
-    return {"messages": [response], "retrieved_docs": []}
+    # retrieved_docs/search_query are reset so a direct answer never reports stale context.
+    return {"messages": [response], "retrieved_docs": [], "search_query": ""}
 
 
 # Generate a response using the retrieved content.
@@ -97,12 +103,14 @@ def generate(state: RagState, config: RunnableConfig):
     scaffolding.reverse()
 
     docs: List[Document] = []
+    search_query = ""
     for message in scaffolding:
         if message.type == "tool":
             docs.extend(message.artifact or [])
-    docs_content = "\n\n".join(f"Document: {doc.page_content}" for doc in docs)
+        elif message.type == "ai" and message.tool_calls:
+            search_query = str(message.tool_calls[0]["args"].get("query", ""))
 
-    system_prompt = f"{_system_prompt(config)}.\n\n{docs_content}"
+    system_prompt = f"{_system_prompt(config)}.\n\n{format_context(docs)}"
     prompt = [SystemMessage(system_prompt)] + _conversation(state)
 
     response = _get_llm().invoke(prompt)
@@ -110,7 +118,11 @@ def generate(state: RagState, config: RunnableConfig):
     # Drop the scaffolding from persisted history: docs are kept in retrieved_docs
     # for this turn only, so the checkpoint does not grow by 20 documents per turn.
     removals = [RemoveMessage(id=message.id) for message in scaffolding]
-    return {"messages": removals + [response], "retrieved_docs": docs}
+    return {
+        "messages": removals + [response],
+        "retrieved_docs": docs,
+        "search_query": search_query,
+    }
 
 
 def init_rag_agent():

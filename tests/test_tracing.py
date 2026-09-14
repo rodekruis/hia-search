@@ -1,8 +1,8 @@
-"""Tests for utils/tracing.py (shared Langfuse client, optional root span)."""
+"""Tests for utils/tracing.py (per-project Langfuse clients, optional root span)."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -10,12 +10,19 @@ import utils.tracing as tracing
 
 
 @pytest.fixture(autouse=True)
-def _reset_client(monkeypatch):
-    monkeypatch.setattr(tracing, "_langfuse", None)
-    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
-    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+def _reset_clients(monkeypatch):
+    monkeypatch.setattr(tracing, "_clients", {})
+    monkeypatch.setattr(tracing, "_public_keys", {})
+    for project in ("SEARCH", "CHAT"):
+        monkeypatch.delenv(f"LANGFUSE_{project}_PUBLIC_KEY", raising=False)
+        monkeypatch.delenv(f"LANGFUSE_{project}_SECRET_KEY", raising=False)
     monkeypatch.delenv("LANGFUSE_BASE_URL", raising=False)
     monkeypatch.delenv("ENVIRONMENT", raising=False)
+
+
+def _set_keys(monkeypatch, project: str, suffix: str = ""):
+    monkeypatch.setenv(f"LANGFUSE_{project.upper()}_PUBLIC_KEY", f"pk-{project}{suffix}")
+    monkeypatch.setenv(f"LANGFUSE_{project.upper()}_SECRET_KEY", f"sk-{project}{suffix}")
 
 
 class TestInit:
@@ -23,53 +30,75 @@ class TestInit:
         langfuse_cls = MagicMock()
         monkeypatch.setattr(tracing, "Langfuse", langfuse_cls)
 
-        assert tracing.init_tracing() is None
-        assert tracing.get_langfuse() is None
+        assert tracing.init_tracing() == {}
+        assert tracing.get_langfuse("search") is None
+        assert tracing.get_langfuse("chat") is None
         langfuse_cls.assert_not_called()
 
     def test_disabled_with_only_one_key(self, monkeypatch):
-        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+        monkeypatch.setenv("LANGFUSE_CHAT_PUBLIC_KEY", "pk")
         monkeypatch.setattr(tracing, "Langfuse", MagicMock())
-        assert tracing.init_tracing() is None
+        assert tracing.init_tracing() == {}
 
-    def test_builds_once_from_env(self, monkeypatch):
-        langfuse_cls = MagicMock()
+    def test_one_client_per_project_with_distinct_keys_same_url(self, monkeypatch):
+        langfuse_cls = MagicMock(side_effect=lambda **kw: MagicMock(name=kw["public_key"]))
         monkeypatch.setattr(tracing, "Langfuse", langfuse_cls)
-        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
-        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+        _set_keys(monkeypatch, "search")
+        _set_keys(monkeypatch, "chat")
         monkeypatch.setenv("LANGFUSE_BASE_URL", "https://lf.example")
         monkeypatch.setenv("ENVIRONMENT", "dev")
 
-        first = tracing.init_tracing()
-        second = tracing.init_tracing()
+        clients = tracing.init_tracing()
 
-        assert first is second is langfuse_cls.return_value is tracing.get_langfuse()
+        assert set(clients) == {"search", "chat"}
+        assert clients["search"] is not clients["chat"]
+        by_key = {c.kwargs["public_key"]: c.kwargs for c in langfuse_cls.call_args_list}
+        assert by_key["pk-search"]["secret_key"] == "sk-search"
+        assert by_key["pk-chat"]["secret_key"] == "sk-chat"
+        assert all(k["base_url"] == "https://lf.example" and k["environment"] == "dev" for k in by_key.values())
+        assert tracing.get_langfuse("chat") is clients["chat"]
+
+    def test_only_configured_project_is_traced(self, monkeypatch):
+        monkeypatch.setattr(tracing, "Langfuse", MagicMock())
+        _set_keys(monkeypatch, "chat")
+
+        clients = tracing.init_tracing()
+
+        assert set(clients) == {"chat"}
+        assert tracing.get_langfuse("search") is None
+
+    def test_init_is_idempotent(self, monkeypatch):
+        langfuse_cls = MagicMock()
+        monkeypatch.setattr(tracing, "Langfuse", langfuse_cls)
+        _set_keys(monkeypatch, "chat")
+
+        first = tracing.init_tracing()["chat"]
+        second = tracing.init_tracing()["chat"]
+
+        assert first is second
         langfuse_cls.assert_called_once()
-        kwargs = langfuse_cls.call_args.kwargs
-        assert kwargs["public_key"] == "pk" and kwargs["secret_key"] == "sk"
-        assert kwargs["base_url"] == "https://lf.example" and kwargs["environment"] == "dev"
 
-    def test_uses_a_dedicated_tracer_provider(self, monkeypatch):
-        """Langfuse must not share the global provider that App Insights exports from."""
+    def test_each_client_gets_its_own_dedicated_tracer_provider(self, monkeypatch):
+        """Neither shares the global provider that App Insights exports from, nor each other's."""
         from opentelemetry import trace
         from opentelemetry.sdk.trace import TracerProvider
 
         langfuse_cls = MagicMock()
         monkeypatch.setattr(tracing, "Langfuse", langfuse_cls)
-        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
-        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+        _set_keys(monkeypatch, "search")
+        _set_keys(monkeypatch, "chat")
 
         tracing.init_tracing()
 
-        provider = langfuse_cls.call_args.kwargs["tracer_provider"]
-        assert isinstance(provider, TracerProvider)
-        assert provider is not trace.get_tracer_provider()
+        providers = [c.kwargs["tracer_provider"] for c in langfuse_cls.call_args_list]
+        assert all(isinstance(p, TracerProvider) for p in providers)
+        assert providers[0] is not providers[1]
+        assert all(p is not trace.get_tracer_provider() for p in providers)
 
     def test_defaults_to_prod_environment_and_cloud_url(self, monkeypatch):
         langfuse_cls = MagicMock()
         monkeypatch.setattr(tracing, "Langfuse", langfuse_cls)
-        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
-        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+        _set_keys(monkeypatch, "search")
         monkeypatch.setenv("LANGFUSE_BASE_URL", "")
 
         tracing.init_tracing()
@@ -78,40 +107,61 @@ class TestInit:
         assert kwargs["base_url"] is None and kwargs["environment"] == "prod"
 
     def test_shutdown_flushes_and_resets(self, monkeypatch):
-        client = MagicMock()
-        monkeypatch.setattr(tracing, "_langfuse", client)
+        search, chat = MagicMock(), MagicMock()
+        monkeypatch.setattr(tracing, "_clients", {"search": search, "chat": chat})
+        monkeypatch.setattr(tracing, "_public_keys", {"search": "a", "chat": "b"})
 
         tracing.shutdown_tracing()
 
-        client.shutdown.assert_called_once()
-        assert tracing.get_langfuse() is None
+        search.shutdown.assert_called_once()
+        chat.shutdown.assert_called_once()
+        assert tracing.get_langfuse("search") is None and tracing.get_langfuse("chat") is None
 
-    def test_shutdown_without_client_is_noop(self):
+    def test_shutdown_without_clients_is_noop(self):
         tracing.shutdown_tracing()
+
+
+class TestLangchainCallbacks:
+    def test_empty_when_project_untraced(self):
+        assert tracing.langchain_callbacks("chat") == []
+
+    def test_handler_bound_to_project_public_key(self, monkeypatch):
+        monkeypatch.setattr(tracing, "_clients", {"chat": MagicMock()})
+        monkeypatch.setattr(tracing, "_public_keys", {"chat": "pk-chat"})
+        with patch("langfuse.langchain.CallbackHandler") as handler_cls:
+            callbacks = tracing.langchain_callbacks("chat")
+        handler_cls.assert_called_once_with(public_key="pk-chat")
+        assert callbacks == [handler_cls.return_value]
 
 
 class TestObserve:
     def test_yields_none_when_disabled(self):
-        with tracing.observe("search", input="q", tags=["x"]) as span:
+        with tracing.observe("search", project="search", input="q", tags=["x"]) as span:
             assert span is None
 
-    def test_opens_root_span_with_propagated_attributes(self, monkeypatch):
-        client = MagicMock()
+    def test_yields_none_for_untraced_project_even_if_other_is_traced(self, monkeypatch):
+        monkeypatch.setattr(tracing, "_clients", {"search": MagicMock()})
+        with tracing.observe("chat-turn", project="chat", input="q", tags=[]) as span:
+            assert span is None
+
+    def test_opens_root_span_on_the_projects_client(self, monkeypatch):
+        search_client, chat_client = MagicMock(), MagicMock()
         span = MagicMock(name="span")
-        client.start_as_current_observation.return_value.__enter__.return_value = span
-        monkeypatch.setattr(tracing, "_langfuse", client)
+        chat_client.start_as_current_observation.return_value.__enter__.return_value = span
+        monkeypatch.setattr(tracing, "_clients", {"search": search_client, "chat": chat_client})
         propagate = MagicMock()
         monkeypatch.setattr(tracing, "propagate_attributes", propagate)
 
         with tracing.observe(
-            "search", input="q", tags=["sheet:s"], session_id="t1", user_id="u1"
+            "chat-turn", project="chat", input="q", tags=["sheet:s"], session_id="t1", user_id="u1"
         ) as got:
             assert got is span
 
         propagate.assert_called_once_with(session_id="t1", user_id="u1", tags=["sheet:s"])
-        client.start_as_current_observation.assert_called_once_with(
-            as_type="span", name="search", input="q"
+        chat_client.start_as_current_observation.assert_called_once_with(
+            as_type="span", name="chat-turn", input="q"
         )
+        search_client.start_as_current_observation.assert_not_called()
 
 
 class TestProviderIsolation:

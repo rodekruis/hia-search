@@ -77,6 +77,7 @@ def test_retrieval_turn_keeps_docs_in_state_and_prunes_scaffolding(vector_store)
     # already verified by chat(), so the tool takes the cached store
     vector_store.assert_called_once_with("sheet-xyz")
     assert result["retrieved_docs"] == DOCS
+    assert result["search_query"] == "housing"
     assert result["messages"][-1].content == "final answer"
     # persisted history holds only the human/AI exchange
     assert [m.type for m in result["messages"]] == ["human", "ai"]
@@ -102,6 +103,7 @@ def test_direct_answer_resets_retrieved_docs(vector_store):
         result = graph.invoke({"messages": [("human", "thanks")]}, CONFIG)
 
     assert result["retrieved_docs"] == []
+    assert result["search_query"] == ""
     assert [m.type for m in result["messages"]] == ["human", "ai", "human", "ai"]
     # second turn's prompt carries prior conversation but no tool scaffolding
     assert [m.type for m in llm.prompts[2][1:]] == ["human", "ai", "human"]

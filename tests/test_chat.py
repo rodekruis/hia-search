@@ -50,13 +50,13 @@ def _twilio_headers(path: str, params: dict, form: dict, token: str = TWILIO_TOK
     return {"X-Twilio-Signature": RequestValidator(token).compute_signature(url, form)}
 
 
-def _make_agent_response(text: str, doc_contents: list[str] | None = None):
+def _make_agent_response(text: str, doc_contents: list[str] | None = None, search_query: str = ""):
     """Build a fake rag_agent.invoke() return value."""
     ai_msg = MagicMock()
     ai_msg.type = "ai"
     ai_msg.content = text
     docs = [Document(page_content=content) for content in doc_contents or []]
-    return {"messages": [ai_msg], "retrieved_docs": docs}
+    return {"messages": [ai_msg], "retrieved_docs": docs, "search_query": search_query}
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +90,7 @@ class TestChatDummy:
         assert "response" in body
         assert body["response"] == "Hello there!"
         assert "context" not in body
+        assert body["traceId"] is None  # tracing disabled in tests
 
     @patch("routes.chat.get_vector_store")
     @patch("routes.chat.detect_language", return_value="en")
@@ -672,3 +673,159 @@ class TestChatTwilioWebhook:
         assert resp.status_code == 200
         # response should contain the translated-back text
         assert "[nl]english reply" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Langfuse: chat-turn root span and /feedback
+# ---------------------------------------------------------------------------
+
+
+class TestChatTracing:
+    @pytest.fixture()
+    def chat_span(self, monkeypatch):
+        import utils.tracing as tracing
+
+        lf_client = MagicMock(name="chat-client")
+        span = MagicMock(name="span")
+        span.trace_id = "trace-abc"
+        lf_client.start_as_current_observation.return_value.__enter__.return_value = span
+        monkeypatch.setattr(tracing, "_clients", {"chat": lf_client})
+        monkeypatch.setattr(tracing, "_public_keys", {"chat": "pk-chat"})
+        monkeypatch.setattr(tracing, "propagate_attributes", MagicMock())
+        callbacks = [MagicMock(name="callback-handler")]
+        monkeypatch.setattr("routes.chat.langchain_callbacks", lambda project: callbacks)
+        return span, lf_client, tracing.propagate_attributes, callbacks
+
+    @patch("routes.chat.get_vector_store")
+    @patch("routes.chat.detect_language", return_value="uk")
+    @patch("routes.chat.translate", side_effect=lambda from_lang, to_lang, text: f"[{to_lang}]{text}")
+    @patch("routes.chat.get_system_prompt", return_value="prompt")
+    @patch("routes.chat.get_rag_agent")
+    def test_retrieval_turn_span_has_evaluator_fields(
+        self, mock_get_agent, mock_prompt, mock_translate, mock_detect, mock_vs, client, chat_span
+    ):
+        span, lf_client, propagate, callbacks = chat_span
+        prior_user, prior_bot = MagicMock(type="human", content="earlier q"), MagicMock(type="ai", content="earlier a")
+        current_user, answer = MagicMock(type="human", content="[en]Де лікар?"), MagicMock(type="ai", content="At the GP.")
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = {
+            "messages": [prior_user, prior_bot, current_user, answer],
+            "retrieved_docs": [Document(page_content="doc A"), Document(page_content="doc B")],
+            "search_query": "where is a doctor",
+        }
+        mock_get_agent.return_value = mock_agent
+
+        resp = client.post(
+            "/chat-dummy", params={"googleSheetId": "sheetX", "threadId": "t-9"}, json={"message": "Де лікар?"}
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["traceId"] == "trace-abc"
+        propagate.assert_called_once_with(
+            session_id="t-9", user_id="t-9", tags=["sheet:sheetX", "channel:dummy", "lang:uk"]
+        )
+        # input is the user's message verbatim, in their language
+        lf_client.start_as_current_observation.assert_called_once_with(
+            as_type="span", name="chat-turn", input="Де лікар?"
+        )
+        # graph spans nest under the root via the project's callback handler
+        assert mock_agent.invoke.call_args.kwargs["config"]["callbacks"] == callbacks
+
+        update = span.update.call_args.kwargs
+        assert update["output"] == "[uk]At the GP."
+        assert update["metadata"] == {
+            "retrieval_used": True,
+            "n_docs": 2,
+            "detected_lang": "uk",
+            "message_en": "[en]Де лікар?",
+            "answer_en": "At the GP.",
+            "conversation_history": "user: earlier q\nassistant: earlier a",
+            "retrieved_context": "Document: doc A\n\nDocument: doc B",
+            "search_query": "where is a doctor",
+        }
+
+    @patch("routes.chat.get_vector_store")
+    @patch("routes.chat.detect_language", return_value="en")
+    @patch("routes.chat.get_system_prompt", return_value="prompt")
+    @patch("routes.chat.get_rag_agent")
+    def test_small_talk_span_has_no_retrieval_fields(
+        self, mock_get_agent, mock_prompt, mock_detect, mock_vs, client, chat_span
+    ):
+        span, *_ = chat_span
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = _make_agent_response("You're welcome!")
+        mock_get_agent.return_value = mock_agent
+
+        client.post("/chat-dummy", params={"googleSheetId": "s"}, json={"message": "thanks"})
+
+        metadata = span.update.call_args.kwargs["metadata"]
+        assert metadata["retrieval_used"] is False and metadata["n_docs"] == 0
+        assert "retrieved_context" not in metadata and "search_query" not in metadata
+
+    @patch("routes.chat.get_vector_store")
+    @patch("routes.chat.detect_language", return_value="en")
+    @patch("routes.chat.get_system_prompt", return_value="prompt")
+    @patch("routes.chat.get_rag_agent")
+    def test_twilio_turns_are_tagged_by_channel(
+        self, mock_get_agent, mock_prompt, mock_detect, mock_vs, client, chat_span
+    ):
+        _, _, propagate, _ = chat_span
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = _make_agent_response("ok")
+        mock_get_agent.return_value = mock_agent
+
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Hi", "From": "+31612345678"}
+        client.post(
+            "/chat-twilio-webhook", params=params, data=form,
+            headers=_twilio_headers("/chat-twilio-webhook", params, form),
+        )
+
+        tags = propagate.call_args.kwargs["tags"]
+        assert "channel:twilio" in tags
+        thread = hashlib.sha256(b"+31612345678").hexdigest()
+        assert propagate.call_args.kwargs["session_id"] == thread
+
+    @patch("routes.chat.get_vector_store")
+    @patch("routes.chat.detect_language", return_value="en")
+    @patch("routes.chat.get_system_prompt", return_value="prompt")
+    @patch("routes.chat.get_rag_agent")
+    def test_no_callbacks_when_untraced(self, mock_get_agent, mock_prompt, mock_detect, mock_vs, client):
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = _make_agent_response("ok")
+        mock_get_agent.return_value = mock_agent
+
+        client.post("/chat-dummy", params={"googleSheetId": "s"}, json={"message": "hi"})
+
+        assert mock_agent.invoke.call_args.kwargs["config"]["callbacks"] == []
+
+
+class TestFeedback:
+    def test_requires_read_key(self):
+        resp = TestClient(app).post("/feedback", json={"traceId": "t", "positive": True})
+        assert resp.status_code == 401
+
+    def test_unavailable_when_chat_tracing_disabled(self, client):
+        resp = client.post("/feedback", json={"traceId": "t", "positive": True})
+        assert resp.status_code == 503
+
+    @pytest.mark.parametrize("positive,value", [(True, 1.0), (False, 0.0)])
+    def test_scores_trace_in_chat_project(self, client, monkeypatch, positive, value):
+        import utils.tracing as tracing
+
+        lf_client = MagicMock()
+        monkeypatch.setattr(tracing, "_clients", {"chat": lf_client, "search": MagicMock()})
+
+        resp = client.post(
+            "/feedback", json={"traceId": "trace-abc", "positive": positive, "comment": "useful"}
+        )
+
+        assert resp.status_code == 202
+        lf_client.create_score.assert_called_once_with(
+            trace_id="trace-abc", name="user-feedback", value=value, data_type="NUMERIC", comment="useful"
+        )
+        tracing._clients["search"].create_score.assert_not_called()
+
+    def test_validates_payload(self, client):
+        assert client.post("/feedback", json={"positive": True}).status_code == 422
+        assert client.post("/feedback", json={"traceId": "t"}).status_code == 422
