@@ -64,7 +64,6 @@ app.add_middleware(
     allow_methods=["POST"],
     allow_headers=["*"],
 )
-# Outermost so every response, including error responses, carries x-request-id
 app.add_middleware(RequestIdMiddleware)
 register_exception_handlers(app)
 
