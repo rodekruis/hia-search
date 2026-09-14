@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from fastapi import Request, Response, APIRouter
+from fastapi import Request, Response, APIRouter, Depends
 from twilio.twiml.messaging_response import MessagingResponse
 from langchain.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
 from utils.vector_store import get_vector_store
 from agents.rag_agent import get_rag_agent
+from utils.auth import require_read_key, require_twilio_signature
 from utils.logger import logger
 from utils.prompt_loader import PromptLoader
 import hashlib
@@ -87,12 +88,18 @@ def chat(
     return {"response": response_text}
 
 
-@router.post("/chat-twilio-webhook", tags=["chat"])
+@router.post(
+    "/chat-twilio-webhook",
+    tags=["chat"],
+    dependencies=[Depends(require_twilio_signature)],
+)
 async def chat_twilio_webhook(
     googleSheetId: str,
     request: Request,
 ):
-    """Chat endpoint for [Twilio Incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook)"""
+    """Chat endpoint for [Twilio Incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook).
+
+    Requests must carry a valid `X-Twilio-Signature` (validated with `TWILIO_AUTH_TOKEN`)."""
     form_data = await request.form()
     message = form_data.get("Body", None)
     if message is None:
@@ -125,7 +132,9 @@ class MessagePayload(BaseModel):
     )
 
 
-@router.post("/chat-dummy", tags=["chat"])
+@router.post(
+    "/chat-dummy", tags=["chat"], dependencies=[Depends(require_read_key)]
+)
 async def chat_dummy(
     payload: MessagePayload,
     request: Request,
@@ -133,7 +142,7 @@ async def chat_dummy(
     threadId: str = None,
     include_context: bool = False,
 ):
-    """Dummy chat endpoint for testing"""
+    """Dummy chat endpoint for testing. Protected with `API_KEY`."""
 
     # if thread ID is not provided, use hashed client host
     if threadId is None:

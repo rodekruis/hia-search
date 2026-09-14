@@ -193,6 +193,8 @@ It returns the chatbot's response as JSON. Protected with `API_KEY`.
 
 The `/chat-twilio-webhook` endpoint receives incoming messages from Twilio and responds via SMS/WhatsApp. See [Set up the chat service](#3-set-up-the-chat-service) for configuration.
 
+🔐 This endpoint only accepts requests signed by Twilio: the `X-Twilio-Signature` header is validated against the `TWILIO_AUTH_TOKEN` environment variable (your Twilio account's Auth Token). Requests without a valid signature are rejected with 401.
+
 ### `/delete-vector-store`
 
 The `/delete-vector-store` endpoint accepts a `googleSheetId` body parameter and deletes the corresponding Azure AI Search index.

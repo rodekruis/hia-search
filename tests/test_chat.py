@@ -4,10 +4,30 @@ from __future__ import annotations
 
 from unittest.mock import patch, MagicMock
 import pytest
+from fastapi.testclient import TestClient
+from twilio.request_validator import RequestValidator
+
+from main import app
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+READ_KEY_HEADER = {"Authorization": "test-api-key"}
+TWILIO_TOKEN = "test-twilio-token"
+
+
+@pytest.fixture()
+def client():
+    """TestClient that sends the read API key by default."""
+    return TestClient(app, headers=READ_KEY_HEADER)
+
+
+def _twilio_headers(path: str, params: dict, form: dict, token: str = TWILIO_TOKEN):
+    """Sign a webhook request the way Twilio does."""
+    query = "&".join(f"{k}={v}" for k, v in params.items())
+    url = f"http://testserver{path}?{query}"
+    return {"X-Twilio-Signature": RequestValidator(token).compute_signature(url, form)}
 
 
 def _make_agent_response(text: str, tool_contents: list[str] | None = None):
@@ -227,6 +247,18 @@ class TestChatDummy:
         )
         assert resp.status_code == 422
 
+    def test_requires_read_key(self):
+        resp = TestClient(app).post(
+            "/chat-dummy", params={"googleSheetId": "sheet123"}, json={"message": "hi"}
+        )
+        assert resp.status_code == 401
+
+    def test_rejects_wrong_read_key(self):
+        resp = TestClient(app, headers={"Authorization": "wrong"}).post(
+            "/chat-dummy", params={"googleSheetId": "sheet123"}, json={"message": "hi"}
+        )
+        assert resp.status_code == 401
+
     @patch("routes.chat.get_vector_store")
     @patch("routes.chat.detect_language", return_value="en")
     @patch("routes.chat.PromptLoader")
@@ -275,15 +307,76 @@ class TestChatTwilioWebhook:
         mock_agent.invoke.return_value = _make_agent_response("Hello from bot!")
         mock_get_agent.return_value = mock_agent
 
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Hi", "From": "+31612345678"}
         resp = client.post(
             "/chat-twilio-webhook",
-            params={"googleSheetId": "sheet123"},
-            data={"Body": "Hi", "From": "+31612345678"},
+            params=params,
+            data=form,
+            headers=_twilio_headers("/chat-twilio-webhook", params, form),
         )
 
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "application/xml"
         assert "Hello from bot!" in resp.text
+
+    def test_twilio_missing_signature(self, client):
+        resp = client.post(
+            "/chat-twilio-webhook",
+            params={"googleSheetId": "sheet123"},
+            data={"Body": "Hi", "From": "+31612345678"},
+        )
+        assert resp.status_code == 401
+
+    def test_twilio_invalid_signature(self, client):
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Hi", "From": "+31612345678"}
+        resp = client.post(
+            "/chat-twilio-webhook",
+            params=params,
+            data=form,
+            headers=_twilio_headers(
+                "/chat-twilio-webhook", params, form, token="other-token"
+            ),
+        )
+        assert resp.status_code == 401
+
+    def test_twilio_missing_token_rejects(self, client, monkeypatch):
+        monkeypatch.delenv("TWILIO_AUTH_TOKEN")
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Hi", "From": "+31612345678"}
+        resp = client.post(
+            "/chat-twilio-webhook",
+            params=params,
+            data=form,
+            headers=_twilio_headers("/chat-twilio-webhook", params, form),
+        )
+        assert resp.status_code == 401
+
+    @patch("routes.chat.get_vector_store")
+    @patch("routes.chat.detect_language", return_value="en")
+    @patch("routes.chat.PromptLoader")
+    @patch("routes.chat.get_rag_agent")
+    def test_twilio_signature_honours_forwarded_proto(
+        self, mock_get_agent, mock_prompt_loader, mock_detect, mock_vs, client
+    ):
+        """Twilio signs the public https URL even when the proxy forwards http."""
+        mock_prompt_loader.return_value.get_prompt.return_value = "prompt"
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = _make_agent_response("ok")
+        mock_get_agent.return_value = mock_agent
+
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Hi", "From": "+31612345678"}
+        url = "https://testserver/chat-twilio-webhook?googleSheetId=sheet123"
+        signature = RequestValidator(TWILIO_TOKEN).compute_signature(url, form)
+        resp = client.post(
+            "/chat-twilio-webhook",
+            params=params,
+            data=form,
+            headers={"X-Twilio-Signature": signature, "X-Forwarded-Proto": "https"},
+        )
+        assert resp.status_code == 200
 
     @patch("routes.chat.get_vector_store")
     @patch("routes.chat.detect_language", return_value="en")
@@ -293,10 +386,13 @@ class TestChatTwilioWebhook:
         self, mock_get_agent, mock_prompt_loader, mock_detect, mock_vs, client
     ):
         """When Body is missing from the form data, return 400."""
+        params = {"googleSheetId": "sheet123"}
+        form = {"From": "+31612345678"}
         resp = client.post(
             "/chat-twilio-webhook",
-            params={"googleSheetId": "sheet123"},
-            data={"From": "+31612345678"},
+            params=params,
+            data=form,
+            headers=_twilio_headers("/chat-twilio-webhook", params, form),
         )
 
         assert resp.status_code == 400
@@ -323,10 +419,13 @@ class TestChatTwilioWebhook:
         mock_agent.invoke.return_value = _make_agent_response("english reply")
         mock_get_agent.return_value = mock_agent
 
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Hallo", "From": "+31600000000"}
         resp = client.post(
             "/chat-twilio-webhook",
-            params={"googleSheetId": "sheet123"},
-            data={"Body": "Hallo", "From": "+31600000000"},
+            params=params,
+            data=form,
+            headers=_twilio_headers("/chat-twilio-webhook", params, form),
         )
 
         assert resp.status_code == 200

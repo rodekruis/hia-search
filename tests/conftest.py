@@ -27,10 +27,11 @@ _ENV_DEFAULTS = {
     "APPLICATIONINSIGHTS_CONNECTION_STRING": "InstrumentationKey=00000000-0000-0000-0000-000000000000",
     "MSCOGNITIVE_KEY": "fake-cognitive-key",
     "MSCOGNITIVE_LOCATION": "westeurope",
+    "TWILIO_AUTH_TOKEN": "test-twilio-token",
 }
 
-for k, v in _ENV_DEFAULTS.items():
-    os.environ.setdefault(k, v)
+# Force-set so values injected by the shell/.env never leak into tests
+os.environ.update(_ENV_DEFAULTS)
 
 # ---------------------------------------------------------------------------
 # Patch heavy modules that connect to external services on import
