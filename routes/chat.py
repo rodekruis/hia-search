@@ -8,6 +8,7 @@ from utils.vector_store import get_vector_store
 from agents.rag_agent import get_rag_agent
 from utils.auth import require_read_key, require_twilio_signature
 from utils.logger import logger
+from utils.messaging import number_chunks, split_message
 from utils.prompt_loader import get_system_prompt
 import hashlib
 import uuid
@@ -99,9 +100,11 @@ def chat_twilio_webhook(
         logger.exception("Twilio chat turn failed", extra=extra_logs)
         response_text = FALLBACK_MESSAGE
 
-    # return TwiML response
+    # return TwiML response; long answers go out as several numbered messages,
+    # since Twilio drops any single <Message> of 1600+ characters
     resp = MessagingResponse()
-    resp.message(response_text)
+    for chunk in number_chunks(split_message(response_text)):
+        resp.message(chunk)
     return Response(content=str(resp), media_type="application/xml")
 
 

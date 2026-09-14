@@ -339,6 +339,42 @@ class TestChatTwilioWebhook:
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "application/xml"
         assert "Hello from bot!" in resp.text
+        assert resp.text.count("<Message>") == 1
+        assert "(1/" not in resp.text
+
+    @patch("routes.chat.get_vector_store")
+    @patch("routes.chat.detect_language", return_value="en")
+    @patch("routes.chat.get_system_prompt", return_value="prompt")
+    @patch("routes.chat.get_rag_agent")
+    def test_long_answer_is_sent_as_numbered_messages(
+        self, mock_get_agent, mock_prompt_loader, mock_detect, mock_vs, client
+    ):
+        """Twilio rejects a single <Message> of 1600+ chars, so long answers are split."""
+        import xml.etree.ElementTree as ET
+
+        answer = "\n\n".join(f"Paragraph {i}: " + "detail " * 60 for i in range(10))
+        assert len(answer) > 1600
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = _make_agent_response(answer)
+        mock_get_agent.return_value = mock_agent
+
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Hi", "From": "+31612345678"}
+        resp = client.post(
+            "/chat-twilio-webhook",
+            params=params,
+            data=form,
+            headers=_twilio_headers("/chat-twilio-webhook", params, form),
+        )
+
+        assert resp.status_code == 200
+        bodies = [m.text for m in ET.fromstring(resp.text).findall("Message")]
+        assert len(bodies) >= 3
+        assert all(len(b) < 1600 for b in bodies)
+        assert [b.split(" ")[0] for b in bodies] == [
+            f"({i}/{len(bodies)})" for i in range(1, len(bodies) + 1)
+        ]
+        assert "Paragraph 0:" in bodies[0] and "Paragraph 9:" in bodies[-1]
 
     def test_twilio_missing_signature(self, client):
         resp = client.post(
