@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import Response, APIRouter, Depends, Form, Query
 from twilio.twiml.messaging_response import MessagingResponse
-from langchain.messages import SystemMessage, HumanMessage
+from langchain.messages import HumanMessage
 from pydantic import BaseModel, Field
 from utils.vector_store import get_vector_store
 from agents.rag_agent import get_rag_agent
@@ -44,39 +44,25 @@ def chat(
         with open(prompt_path, "r") as f:
             prompt = f.read()
 
-    # invoke the agent graph with the question
+    # invoke the agent graph with the question; prompt and sheet id travel in the
+    # run config so they are not persisted into the conversation history
     response = get_rag_agent().invoke(
-        {
-            "messages": [
-                SystemMessage(prompt + f" googleSheetId is {googleSheetId}."),
-                HumanMessage(message),
-            ]
+        {"messages": [HumanMessage(message)]},
+        config={
+            "configurable": {
+                "thread_id": threadId,
+                "googleSheetId": googleSheetId,
+                "system_prompt": prompt,
+            }
         },
-        config={"configurable": {"thread_id": threadId}},
     )
     response_text = response["messages"][-1].content
 
-    # extract retrieved context from tool messages if requested
     retrieved_context = None
     if include_context:
-        # Each tool message contains concatenated docs separated by "\n\nDocument: "
-        # Split them into individual documents and deduplicate
-        all_docs = []
-        seen = set()
-        for msg in response["messages"]:
-            if msg.type == "tool":
-                # Split on the "Document: " prefix pattern
-                parts = msg.content.split("\n\nDocument: ")
-                for i, part in enumerate(parts):
-                    # First part already starts with "Document: ", others don't
-                    doc_text = (
-                        part if part.startswith("Document: ") else f"Document: {part}"
-                    )
-                    doc_text = doc_text.strip()
-                    if doc_text and doc_text not in seen:
-                        seen.add(doc_text)
-                        all_docs.append(doc_text)
-        retrieved_context = all_docs
+        retrieved_context = [
+            doc.page_content for doc in response.get("retrieved_docs") or []
+        ]
 
     # translate response back to original language if needed
     if detected_lang != "en":

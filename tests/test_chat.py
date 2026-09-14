@@ -6,6 +6,7 @@ import uuid
 from unittest.mock import patch, MagicMock
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.documents import Document
 from twilio.request_validator import RequestValidator
 
 from main import app
@@ -31,21 +32,13 @@ def _twilio_headers(path: str, params: dict, form: dict, token: str = TWILIO_TOK
     return {"X-Twilio-Signature": RequestValidator(token).compute_signature(url, form)}
 
 
-def _make_agent_response(text: str, tool_contents: list[str] | None = None):
+def _make_agent_response(text: str, doc_contents: list[str] | None = None):
     """Build a fake rag_agent.invoke() return value."""
-    messages = []
-    # optional tool messages (retrieved context)
-    for content in tool_contents or []:
-        msg = MagicMock()
-        msg.type = "tool"
-        msg.content = content
-        messages.append(msg)
-    # final AI message
     ai_msg = MagicMock()
     ai_msg.type = "ai"
     ai_msg.content = text
-    messages.append(ai_msg)
-    return {"messages": messages}
+    docs = [Document(page_content=content) for content in doc_contents or []]
+    return {"messages": [ai_msg], "retrieved_docs": docs}
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +83,7 @@ class TestChatDummy:
         mock_prompt_loader.return_value.get_prompt.return_value = "prompt"
         mock_agent = MagicMock()
         mock_agent.invoke.return_value = _make_agent_response(
-            "answer", tool_contents=["doc1", "doc2"]
+            "answer", doc_contents=["doc1", "doc2"]
         )
         mock_get_agent.return_value = mock_agent
 
@@ -115,7 +108,7 @@ class TestChatDummy:
         mock_prompt_loader.return_value.get_prompt.return_value = "prompt"
         mock_agent = MagicMock()
         mock_agent.invoke.return_value = _make_agent_response(
-            "answer", tool_contents=["Document: ctx1", "Document: ctx2"]
+            "answer", doc_contents=["ctx1", "ctx2"]
         )
         mock_get_agent.return_value = mock_agent
 
@@ -128,7 +121,7 @@ class TestChatDummy:
         assert resp.status_code == 200
         body = resp.json()
         assert body["response"] == "answer"
-        assert body["context"] == ["Document: ctx1", "Document: ctx2"]
+        assert body["context"] == ["ctx1", "ctx2"]
 
     @patch("routes.chat.get_vector_store")
     @patch("routes.chat.detect_language", return_value="en")
@@ -137,12 +130,12 @@ class TestChatDummy:
     def test_include_context_no_tool_messages(
         self, mock_get_agent, mock_prompt_loader, mock_detect, mock_vs, client
     ):
-        """When include_context=True but agent returned no tool messages,
+        """When include_context=True but the agent answered without retrieving,
         context should be an empty list."""
         mock_prompt_loader.return_value.get_prompt.return_value = "prompt"
         mock_agent = MagicMock()
         mock_agent.invoke.return_value = _make_agent_response(
-            "answer", tool_contents=[]
+            "answer", doc_contents=[]
         )
         mock_get_agent.return_value = mock_agent
 
@@ -178,6 +171,31 @@ class TestChatDummy:
             call_kwargs[1]["document_id"]
             == "14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04"
         )
+
+    @patch("routes.chat.get_vector_store")
+    @patch("routes.chat.detect_language", return_value="en")
+    @patch("routes.chat.PromptLoader")
+    @patch("routes.chat.get_rag_agent")
+    def test_prompt_and_sheet_id_travel_in_config_not_messages(
+        self, mock_get_agent, mock_prompt_loader, mock_detect, mock_vs, client
+    ):
+        mock_prompt_loader.return_value.get_prompt.return_value = "You are helpful."
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = _make_agent_response("ok")
+        mock_get_agent.return_value = mock_agent
+
+        resp = client.post(
+            "/chat-dummy",
+            params={"googleSheetId": "sheet123"},
+            json={"message": "hello"},
+        )
+
+        assert resp.status_code == 200
+        state_input, kwargs = mock_agent.invoke.call_args
+        configurable = kwargs["config"]["configurable"]
+        assert configurable["system_prompt"] == "You are helpful."
+        assert configurable["googleSheetId"] == "sheet123"
+        assert [m.type for m in state_input[0]["messages"]] == ["human"]
 
     @patch("routes.chat.get_vector_store")
     @patch("routes.chat.detect_language", return_value="it")

@@ -1,16 +1,16 @@
 from __future__ import annotations
 import atexit
 from langchain_core.documents import Document
-from typing_extensions import List
+from typing_extensions import Annotated, List
 from langchain_openai import AzureChatOpenAI
 from langgraph.graph import StateGraph, MessagesState
-from langchain.messages import SystemMessage
+from langchain.messages import SystemMessage, RemoveMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.graph import END
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg_pool import ConnectionPool
-from pydantic import BaseModel, Field
 import os
 from urllib.parse import quote
 from utils.vector_store import get_vector_store
@@ -22,6 +22,15 @@ load_dotenv()
 _llm = None
 _rag_agent = None
 _checkpointer_pool = None
+
+# Number of recent human/AI messages passed to the LLM
+_HISTORY_WINDOW = 10
+
+
+class RagState(MessagesState):
+    """Conversation state: `messages` holds only human/AI turns; docs live apart."""
+
+    retrieved_docs: List[Document]
 
 
 def _get_llm():
@@ -37,86 +46,73 @@ def _get_llm():
     return _llm
 
 
-class RetrieveInput(BaseModel):
-    """Input schema for retrieval tool."""
-    query: str = Field(description="The search query to retrieve relevant documents.")
-    googleSheetId: str = Field(description="The ID of the Google Sheet to search.")
+def _system_prompt(config: RunnableConfig) -> str:
+    return config["configurable"]["system_prompt"]
 
 
-# Retrieval tool
-@tool(response_format="content_and_artifact", args_schema=RetrieveInput)
-def retrieve(query: str, googleSheetId: str) -> tuple[str, List[Document]]:
+def _conversation(state: RagState) -> list:
+    """Recent human/AI turns, excluding tool-call scaffolding."""
+    return [
+        message
+        for message in state["messages"]
+        if message.type == "human" or (message.type == "ai" and not message.tool_calls)
+    ][-_HISTORY_WINDOW:]
+
+
+# Retrieval tool. googleSheetId comes from the run config, not from the LLM,
+# so the model cannot hallucinate a sheet id.
+@tool(response_format="content_and_artifact")
+def retrieve(
+    query: Annotated[str, "The search query to retrieve relevant documents."],
+    config: RunnableConfig,
+) -> tuple[str, List[Document]]:
     """Retrieve information related to a query."""
-    vector_store = get_vector_store(googleSheetId, check_if_exists=True)
+    google_sheet_id = config["configurable"]["googleSheetId"]
+    vector_store = get_vector_store(google_sheet_id, check_if_exists=True)
     retrieved_docs = vector_store.similarity_search(query, k=20)
     serialized = "\n\n".join(f"Document: {doc.page_content}" for doc in retrieved_docs)
     return serialized, retrieved_docs
 
 
 # Define retrieve-or-respond node
-def query_or_respond(state: MessagesState) -> dict:
+def query_or_respond(state: RagState, config: RunnableConfig) -> dict:
     """Generate tool call for retrieval or respond."""
     llm_with_tools = _get_llm().bind_tools([retrieve])
-
-    # Get most recent message of type system to use as system prompt
-    system_prompt = [
-        message.content
-        for message in reversed(state["messages"])
-        if message.type == "system"
-    ][0]
-
-    # Pass also recent conversation messages
-    conversation_messages = [
-        message
-        for message in state["messages"]
-        if message.type == "human" or (message.type == "ai" and not message.tool_calls)
-    ][-10:]
-
-    prompt = [SystemMessage(system_prompt)] + conversation_messages
-
+    prompt = [SystemMessage(_system_prompt(config))] + _conversation(state)
     response = llm_with_tools.invoke(prompt)
 
-    # MessagesState appends messages to state instead of overwriting
-    return {"messages": [response]}
+    # MessagesState appends messages to state instead of overwriting;
+    # retrieved_docs is reset so a direct answer never reports stale context.
+    return {"messages": [response], "retrieved_docs": []}
 
 
 # Generate a response using the retrieved content.
-def generate(state: MessagesState):
+def generate(state: RagState, config: RunnableConfig):
     """Generate answer."""
 
-    # Get all docs recently retrieved
-    recent_tool_messages = []
+    # Collect this turn's tool-call scaffolding (AI tool call + tool results)
+    scaffolding = []
     for message in reversed(state["messages"]):
-        if message.type == "tool":
-            recent_tool_messages.append(message)
-        else:
+        scaffolding.append(message)
+        if message.type == "ai" and message.tool_calls:
             break
-    tool_messages = recent_tool_messages[::-1]
-    docs = [doc.content for doc in tool_messages]
-    docs_content = "\n\n".join(docs)
+    scaffolding.reverse()
 
-    # Get most recent message of type system to use as system prompt
-    system_prompt = [
-        message.content
-        for message in reversed(state["messages"])
-        if message.type == "system"
-    ][0]
+    docs: List[Document] = []
+    for message in scaffolding:
+        if message.type == "tool":
+            docs.extend(message.artifact or [])
+    docs_content = "\n\n".join(f"Document: {doc.page_content}" for doc in docs)
 
-    # Merge system prompt with retrieved docs
-    system_prompt = f"{system_prompt}.\n\n{docs_content}"
+    system_prompt = f"{_system_prompt(config)}.\n\n{docs_content}"
+    prompt = [SystemMessage(system_prompt)] + _conversation(state)
 
-    # Pass also recent conversation messages
-    conversation_messages = [
-        message
-        for message in state["messages"]
-        if message.type == "human" or (message.type == "ai" and not message.tool_calls)
-    ][-10:]
-    prompt = [SystemMessage(system_prompt)] + conversation_messages
-
-    # Run
     response = _get_llm().invoke(prompt)
 
-    return {"messages": [response]}
+    # Drop the scaffolding from persisted history: docs are kept in retrieved_docs
+    # for this turn only, so the checkpoint does not grow by 20 documents per turn.
+    removals = [RemoveMessage(id=message.id) for message in scaffolding]
+    return {"messages": removals + [response], "retrieved_docs": docs}
 
 
 def _cleanup_checkpointer():
@@ -148,9 +144,13 @@ def _build_agent():
 
     checkpointer = PostgresSaver(_checkpointer_pool)
     checkpointer.setup()
+    return build_graph(checkpointer)
 
+
+def build_graph(checkpointer):
+    """Compile the RAG graph on top of the given checkpointer."""
     tools = ToolNode([retrieve])
-    graph_builder = StateGraph(MessagesState)
+    graph_builder = StateGraph(RagState)
     graph_builder.add_node(query_or_respond)
     graph_builder.add_node(tools)
     graph_builder.add_node(generate)
