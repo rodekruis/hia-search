@@ -18,7 +18,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 _llm = None
-# Set by init_rag_agent() at process startup (FastAPI lifespan), one pool per worker
 _rag_agent = None
 _checkpointer_pool = None
 
@@ -68,7 +67,7 @@ def retrieve(
     """Retrieve information related to a query."""
     google_sheet_id = config["configurable"]["googleSheetId"]
     vector_store = get_vector_store(google_sheet_id, check_if_exists=True)
-    retrieved_docs = vector_store.similarity_search(query, k=20)
+    retrieved_docs = vector_store.similarity_search(query, k=10)
     serialized = "\n\n".join(f"Document: {doc.page_content}" for doc in retrieved_docs)
     return serialized, retrieved_docs
 
@@ -115,11 +114,7 @@ def generate(state: RagState, config: RunnableConfig):
 
 
 def init_rag_agent():
-    """Open the checkpoint pool and compile the graph; fails fast on bad DB config.
-
-    Must run after fork (per gunicorn worker), so call it from the app lifespan,
-    never at import time.
-    """
+    """Open the checkpoint pool and compile the graph."""
     global _rag_agent, _checkpointer_pool
     if _rag_agent is not None:
         return _rag_agent
