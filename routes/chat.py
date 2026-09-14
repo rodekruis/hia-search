@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import Request, Response, APIRouter, Depends
+from fastapi import Request, Response, APIRouter, Depends, Form
 from twilio.twiml.messaging_response import MessagingResponse
 from langchain.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
@@ -88,24 +88,24 @@ def chat(
     return {"response": response_text}
 
 
+# Chat handlers are plain `def`: the agent, translation and DB calls are blocking,
+# so FastAPI must run them in its threadpool instead of on the event loop.
 @router.post(
     "/chat-twilio-webhook",
     tags=["chat"],
     dependencies=[Depends(require_twilio_signature)],
 )
-async def chat_twilio_webhook(
+def chat_twilio_webhook(
     googleSheetId: str,
-    request: Request,
+    message: str | None = Form(None, alias="Body"),
+    sender: str | None = Form(None, alias="From"),
 ):
     """Chat endpoint for [Twilio Incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook).
 
     Requests must carry a valid `X-Twilio-Signature` (validated with `TWILIO_AUTH_TOKEN`)."""
-    form_data = await request.form()
-    message = form_data.get("Body", None)
     if message is None:
         return Response(content="No message provided", status_code=400)
 
-    sender = form_data.get("From", None)
     if sender is None:
         return Response(content="No sender provided", status_code=400)
 
@@ -135,7 +135,7 @@ class MessagePayload(BaseModel):
 @router.post(
     "/chat-dummy", tags=["chat"], dependencies=[Depends(require_read_key)]
 )
-async def chat_dummy(
+def chat_dummy(
     payload: MessagePayload,
     request: Request,
     googleSheetId: str = "14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04",
