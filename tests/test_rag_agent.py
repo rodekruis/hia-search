@@ -32,12 +32,14 @@ class FakeLLM:
     def __init__(self, replies: list[AIMessage]):
         self.replies = list(replies)
         self.prompts: list[list] = []
+        self.configs: list = []
 
     def bind_tools(self, _tools):
         return self
 
-    def invoke(self, prompt):
+    def invoke(self, prompt, config=None):
         self.prompts.append(prompt)
+        self.configs.append(config)
         return self.replies.pop(0)
 
 
@@ -119,6 +121,88 @@ def test_conversation_window_keeps_last_ten_turns():
     window = rag_agent._conversation({"messages": messages})
     assert len(window) == 10
     assert window[-1].content == "m29"
+
+
+def test_llm_callbacks_reach_only_the_model_calls(vector_store):
+    """Callbacks travel via configurable so nodes/edges/tool wrappers are not traced."""
+    llm = FakeLLM([_tool_call_msg("housing"), AIMessage(content="answer")])
+    graph = rag_agent.build_graph(MemorySaver())
+    handler = object()
+    config = {"configurable": {**CONFIG["configurable"], "llm_callbacks": [handler]}}
+
+    with patch.object(rag_agent, "_get_llm", return_value=llm):
+        graph.invoke({"messages": [("human", "where can I live?")]}, config)
+
+    assert [c["callbacks"] for c in llm.configs] == [[handler], [handler]]
+
+
+def test_llm_calls_default_to_no_callbacks(vector_store):
+    llm = FakeLLM([AIMessage(content="hi")])
+    graph = rag_agent.build_graph(MemorySaver())
+
+    with patch.object(rag_agent, "_get_llm", return_value=llm):
+        graph.invoke({"messages": [("human", "hello")]}, CONFIG)
+
+    assert llm.configs == [{"callbacks": []}]
+
+
+def test_langfuse_generations_nest_under_root_span_from_graph_threads(vector_store):
+    """Offline: LLM-level CallbackHandler observations must attach to the chat-turn span.
+
+    LangGraph runs nodes in worker threads; this guards that the OTel context (and
+    with it the root span) reaches the model calls, so a turn is one trace with
+    exactly two generations and no node/edge scaffolding.
+    """
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langfuse import Langfuse
+    from langfuse.langchain import CallbackHandler
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exporter = InMemorySpanExporter()
+    langfuse = Langfuse(
+        public_key="pk-lf-chat-nesting",
+        secret_key="sk",
+        tracer_provider=TracerProvider(),
+        span_exporter=exporter,
+    )
+    model = FakeMessagesListChatModel(
+        responses=[_tool_call_msg("housing"), AIMessage(content="answer")]
+    )
+
+    class ToolAwareFake:
+        def bind_tools(self, _tools):
+            return model
+
+        def invoke(self, prompt, config=None):
+            return model.invoke(prompt, config=config)
+
+    graph = rag_agent.build_graph(MemorySaver())
+    config = {
+        "configurable": {
+            **CONFIG["configurable"],
+            "llm_callbacks": [CallbackHandler(public_key="pk-lf-chat-nesting")],
+        }
+    }
+    try:
+        with patch.object(rag_agent, "_get_llm", return_value=ToolAwareFake()):
+            with langfuse.start_as_current_observation(as_type="span", name="chat-turn") as root:
+                graph.invoke({"messages": [("human", "where can I live?")]}, config)
+        langfuse.flush()
+    finally:
+        langfuse.shutdown()
+
+    spans = exporter.get_finished_spans()
+    by_name = {}
+    for span in spans:
+        by_name.setdefault(span.name, []).append(span)
+    assert set(by_name) == {"chat-turn", "FakeMessagesListChatModel"}, sorted(by_name)
+    generations = by_name["FakeMessagesListChatModel"]
+    assert len(generations) == 2
+    root_id = by_name["chat-turn"][0].context.span_id
+    assert all(g.parent is not None and g.parent.span_id == root_id for g in generations)
+    assert all(g.context.trace_id == by_name["chat-turn"][0].context.trace_id for g in generations)
+    assert all(g.attributes.get("langfuse.observation.type") == "generation" for g in generations)
 
 
 def test_retrieve_tool_schema_hides_sheet_id():

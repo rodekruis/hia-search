@@ -55,6 +55,15 @@ def _system_prompt(config: RunnableConfig) -> str:
     return config["configurable"]["system_prompt"]
 
 
+def _llm_config(config: RunnableConfig) -> RunnableConfig:
+    """Tracing callbacks for the LLM calls only.
+
+    Passing callbacks to the graph run would also record every node, edge and
+    tool wrapper; only the two model calls are worth an observation.
+    """
+    return {"callbacks": config["configurable"].get("llm_callbacks") or []}
+
+
 def _conversation(state: RagState) -> list:
     """Recent human/AI turns, excluding tool-call scaffolding."""
     return [
@@ -83,7 +92,7 @@ def query_or_respond(state: RagState, config: RunnableConfig) -> dict:
     """Generate tool call for retrieval or respond."""
     llm_with_tools = _get_llm().bind_tools([retrieve])
     prompt = [SystemMessage(_system_prompt(config))] + _conversation(state)
-    response = llm_with_tools.invoke(prompt)
+    response = llm_with_tools.invoke(prompt, config=_llm_config(config))
 
     # MessagesState appends messages to state instead of overwriting;
     # retrieved_docs/search_query are reset so a direct answer never reports stale context.
@@ -113,7 +122,7 @@ def generate(state: RagState, config: RunnableConfig):
     system_prompt = f"{_system_prompt(config)}.\n\n{format_context(docs)}"
     prompt = [SystemMessage(system_prompt)] + _conversation(state)
 
-    response = _get_llm().invoke(prompt)
+    response = _get_llm().invoke(prompt, config=_llm_config(config))
 
     # Drop the scaffolding from persisted history: docs are kept in retrieved_docs
     # for this turn only, so the checkpoint does not grow by 20 documents per turn.

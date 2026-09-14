@@ -74,8 +74,9 @@ def chat(
                     "thread_id": threadId,
                     "googleSheetId": googleSheetId,
                     "system_prompt": prompt,
+                    # only the LLM calls are traced, nested under the chat-turn span
+                    "llm_callbacks": langchain_callbacks("chat"),
                 },
-                "callbacks": langchain_callbacks("chat"),
             },
         )
         answer_en = response["messages"][-1].content

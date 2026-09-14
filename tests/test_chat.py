@@ -729,7 +729,7 @@ class TestChatTracing:
             as_type="span", name="chat-turn", input="Де лікар?"
         )
         # graph spans nest under the root via the project's callback handler
-        assert mock_agent.invoke.call_args.kwargs["config"]["callbacks"] == callbacks
+        assert mock_agent.invoke.call_args.kwargs["config"]["configurable"]["llm_callbacks"] == callbacks
 
         update = span.update.call_args.kwargs
         assert update["output"] == "[uk]At the GP."
@@ -797,7 +797,7 @@ class TestChatTracing:
 
         client.post("/chat-dummy", params={"googleSheetId": "s"}, json={"message": "hi"})
 
-        assert mock_agent.invoke.call_args.kwargs["config"]["callbacks"] == []
+        assert mock_agent.invoke.call_args.kwargs["config"]["configurable"]["llm_callbacks"] == []
 
 
 class TestFeedback:
