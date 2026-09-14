@@ -26,9 +26,17 @@ WORKDIR /app
 RUN uv sync --frozen --no-dev
 RUN uv run python -m spacy download en_core_web_sm
 
-# expose the port that uvicorn will run the app on
+# expose the port that the server will run the app on
 ENV PORT=8000
 EXPOSE 8000
 
-# execute the command python main.py (in the WORKDIR) to start the app
-CMD ["uv", "run", "python", "main.py"]
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD python -c "import os, urllib.request; urllib.request.urlopen('http://localhost:%s/health' % os.environ['PORT'])" || exit 1
+
+# gunicorn + uvicorn workers; no hot-reload in production. Each worker owns a
+# Postgres pool (max 20 conns), so keep WEB_CONCURRENCY within the DB's limit.
+ENV WEB_CONCURRENCY=2
+CMD uv run gunicorn main:app \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --bind 0.0.0.0:${PORT} \
+    --timeout 120

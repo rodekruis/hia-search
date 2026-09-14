@@ -70,6 +70,12 @@ async def docs_redirect():
     return RedirectResponse(url="/docs")
 
 
+@app.get("/health", include_in_schema=False)
+async def health():
+    """Liveness probe for container orchestration."""
+    return {"status": "ok"}
+
+
 # Include routes
 app.include_router(search.router)
 app.include_router(data.router)

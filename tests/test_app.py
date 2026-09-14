@@ -11,6 +11,11 @@ class TestAppRoot:
         assert resp.status_code == 307
         assert "/docs" in resp.headers["location"]
 
+    def test_health(self, client):
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
     def test_get_models(self, client):
         resp = client.get("/get-models")
         assert resp.status_code == 200
