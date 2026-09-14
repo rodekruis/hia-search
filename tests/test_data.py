@@ -82,6 +82,22 @@ class TestDeleteVectorStore:
         assert resp.status_code == 200
         mock_client.delete_index.assert_called_once()
 
+    @patch("routes.data.invalidate_vector_store")
+    @patch("routes.data.SearchIndexClient")
+    def test_delete_evicts_cached_store(self, mock_index_client_cls, mock_invalidate, client):
+        resp = client.request(
+            "DELETE", "/delete-vector-store", json={"googleSheetId": "sheet123"}
+        )
+        assert resp.status_code == 200
+        mock_invalidate.assert_called_once_with("sheet123")
+
+    @patch("routes.data.invalidate_vector_store")
+    @patch("routes.data.SearchIndexClient")
+    def test_failed_delete_keeps_cache(self, mock_index_client_cls, mock_invalidate, client):
+        mock_index_client_cls.return_value.delete_index.side_effect = Exception("nope")
+        client.request("DELETE", "/delete-vector-store", json={"googleSheetId": "sheet123"})
+        mock_invalidate.assert_not_called()
+
     @patch("routes.data.SearchIndexClient")
     def test_delete_not_found(self, mock_index_client_cls, client):
         mock_client = MagicMock()

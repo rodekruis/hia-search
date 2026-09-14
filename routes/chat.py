@@ -8,11 +8,10 @@ from utils.vector_store import get_vector_store
 from agents.rag_agent import get_rag_agent
 from utils.auth import require_read_key, require_twilio_signature
 from utils.logger import logger
-from utils.prompt_loader import PromptLoader
+from utils.prompt_loader import get_system_prompt
 import hashlib
 import uuid
 from utils.translator import translate, detect_language
-from pathlib import Path
 
 router = APIRouter()
 
@@ -25,7 +24,8 @@ def chat(
 ) -> dict:
     """Core chat function used by multiple endpoints."""
 
-    # check if vector store exists for the given googleSheetId (if it doesn't, it will be created)
+    # ensure the vector store exists (created from the sheet if not); cached after the
+    # first call, so this is the only existence check per turn
     _ = get_vector_store(googleSheetId, check_if_exists=True)
 
     # translate message to English if needed
@@ -33,19 +33,7 @@ def chat(
     if detected_lang != "en":
         message = translate(from_lang=detected_lang, to_lang="en", text=message)
 
-    # get system prompt
-    prompt_loader = PromptLoader(
-        document_type="googlesheet",
-        document_id=googleSheetId,
-    )
-    prompt = prompt_loader.get_prompt()
-    if prompt == "":
-        # use default prompt
-        prompt_path = (
-            Path(__file__).resolve().parent.parent / "config" / "rag_agent_prompt.txt"
-        )
-        with open(prompt_path, "r") as f:
-            prompt = f.read()
+    prompt = get_system_prompt(googleSheetId)
 
     # invoke the agent graph with the question; prompt and sheet id travel in the
     # run config so they are not persisted into the conversation history

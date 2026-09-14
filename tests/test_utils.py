@@ -273,6 +273,63 @@ class TestPromptLoader:
         assert loader.get_prompt() == "Hi"
 
 
+class TestGetSystemPrompt:
+    @pytest.fixture(autouse=True)
+    def _clear(self):
+        from utils.prompt_loader import clear_prompt_cache
+
+        clear_prompt_cache()
+        yield
+        clear_prompt_cache()
+
+    @patch("utils.prompt_loader.PromptLoader")
+    def test_fetches_once_within_ttl(self, mock_loader):
+        from utils.prompt_loader import get_system_prompt
+
+        mock_loader.return_value.get_prompt.return_value = "Be kind."
+
+        assert get_system_prompt("sheetA") == "Be kind."
+        assert get_system_prompt("sheetA") == "Be kind."
+
+        mock_loader.assert_called_once_with(document_type="googlesheet", document_id="sheetA")
+
+    @patch("utils.prompt_loader.PromptLoader")
+    def test_cache_is_per_sheet(self, mock_loader):
+        from utils.prompt_loader import get_system_prompt
+
+        mock_loader.return_value.get_prompt.side_effect = ["A", "B"]
+
+        assert get_system_prompt("sheetA") == "A"
+        assert get_system_prompt("sheetB") == "B"
+        assert get_system_prompt("sheetA") == "A"
+        assert mock_loader.call_count == 2
+
+    @patch("utils.prompt_loader.time.monotonic")
+    @patch("utils.prompt_loader.PromptLoader")
+    def test_refetches_after_ttl(self, mock_loader, mock_clock):
+        import utils.prompt_loader as pl
+
+        mock_loader.return_value.get_prompt.side_effect = ["old", "new"]
+        mock_clock.side_effect = [0.0, pl.PROMPT_CACHE_TTL_S - 1, pl.PROMPT_CACHE_TTL_S + 1]
+
+        assert pl.get_system_prompt("s") == "old"
+        assert pl.get_system_prompt("s") == "old"
+        assert pl.get_system_prompt("s") == "new"
+
+    @patch("utils.prompt_loader.PromptLoader")
+    def test_falls_back_to_default_file_and_caches_it(self, mock_loader):
+        import utils.prompt_loader as pl
+
+        mock_loader.return_value.get_prompt.return_value = ""
+        expected = pl.DEFAULT_PROMPT_PATH.read_text(encoding="utf-8")
+
+        assert pl.get_system_prompt("s") == expected
+        assert expected.strip() != ""
+        pl.get_system_prompt("s")
+        # a sheet without a prompt must not be re-fetched every turn either
+        mock_loader.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # auth.py
 # ---------------------------------------------------------------------------

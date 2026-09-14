@@ -73,8 +73,9 @@ def test_retrieval_turn_keeps_docs_in_state_and_prunes_scaffolding(vector_store)
     with patch.object(rag_agent, "_get_llm", return_value=llm):
         result = graph.invoke({"messages": [("human", "where can I live?")]}, CONFIG)
 
-    # sheet id comes from config, not from the LLM's tool args
-    vector_store.assert_called_once_with("sheet-xyz", check_if_exists=True)
+    # sheet id comes from config, not from the LLM's tool args; existence was
+    # already verified by chat(), so the tool takes the cached store
+    vector_store.assert_called_once_with("sheet-xyz")
     assert result["retrieved_docs"] == DOCS
     assert result["messages"][-1].content == "final answer"
     # persisted history holds only the human/AI exchange

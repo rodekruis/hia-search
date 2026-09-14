@@ -25,7 +25,7 @@ def _chat_failing_with(exc: Exception):
     return (
         patch("routes.chat.get_vector_store"),
         patch("routes.chat.detect_language", return_value="en"),
-        patch("routes.chat.PromptLoader"),
+        patch("routes.chat.get_system_prompt", return_value="prompt"),
         patch("routes.chat.get_rag_agent", return_value=agent),
     )
 

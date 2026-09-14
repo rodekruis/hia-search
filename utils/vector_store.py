@@ -31,6 +31,11 @@ import os
 
 DEFAULT_HUGGING_FACE_MODEL = "sentence-transformers/all-mpnet-base-v2"
 
+# Per-process cache of stores whose index is known to exist. Building a VectorStore
+# is not free: langchain's AzureSearch does a get_index round trip in its constructor,
+# and the existence check is another one.
+_stores: dict[str, VectorStore] = {}
+
 
 dm = DocumentMetadata()
 
@@ -295,14 +300,28 @@ def create_vector_store_index(
     logger.info(
         f"Created vector store index {vector_store.store_id} with {n_docs} documents."
     )
+    _stores[vector_store.store_id] = vector_store
     return vector_store
+
+
+def invalidate_vector_store(google_sheet_id: str) -> None:
+    """Forget a cached store (call after deleting its index)."""
+    _stores.pop(googleid_to_vectorstoreid(google_sheet_id), None)
 
 
 def get_vector_store(
     google_sheet_id: str, check_if_exists: bool = False
 ) -> VectorStore:
-    """Get vector store from Azure Search."""
+    """Get vector store from Azure Search.
+
+    With `check_if_exists`, a missing/empty index is created from the Google Sheet
+    and the store is cached, so the check runs once per process, not per request.
+    """
     vector_store_id = googleid_to_vectorstoreid(google_sheet_id)
+    cached = _stores.get(vector_store_id)
+    if cached is not None:
+        return cached
+
     vector_store = VectorStore(
         store_path=os.environ["VECTOR_STORE_ADDRESS"],
         store_service="azuresearch",
@@ -311,12 +330,13 @@ def get_vector_store(
         embedding_model=os.environ["MODEL_EMBEDDINGS"],
         store_id=vector_store_id,
     )
-    # if index is not found, create it
-    if check_if_exists and vector_store.count_documents() == 0:
-        logger.info(f"Vector store {vector_store_id} not found. Creating new one.")
-        vector_store = create_vector_store_index(
-            document_type="googlesheet",
-            document_id=google_sheet_id,
-            document_data={},
-        )
+    if check_if_exists:
+        if vector_store.count_documents() == 0:
+            logger.info(f"Vector store {vector_store_id} not found. Creating new one.")
+            vector_store = create_vector_store_index(
+                document_type="googlesheet",
+                document_id=google_sheet_id,
+                document_data={},
+            )
+        _stores[vector_store_id] = vector_store
     return vector_store

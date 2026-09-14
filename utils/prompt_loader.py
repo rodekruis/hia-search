@@ -1,7 +1,36 @@
+import os
+import time
 import urllib
+from pathlib import Path
+
 import pandas as pd
 from utils.logger import logger
 from fastapi import HTTPException
+
+DEFAULT_PROMPT_PATH = Path(__file__).resolve().parent.parent / "config" / "rag_agent_prompt.txt"
+
+# The sheet is fetched over HTTP; re-reading it on every chat turn is pure latency.
+# Prompt edits in the sheet take effect within this many seconds.
+PROMPT_CACHE_TTL_S = float(os.environ.get("PROMPT_CACHE_TTL_S", "300"))
+_prompt_cache: dict[str, tuple[float, str]] = {}
+
+
+def get_system_prompt(google_sheet_id: str) -> str:
+    """System prompt for a HIA instance: its sheet's `#system-prompt`, else the default file."""
+    now = time.monotonic()
+    cached = _prompt_cache.get(google_sheet_id)
+    if cached is not None and now - cached[0] < PROMPT_CACHE_TTL_S:
+        return cached[1]
+
+    prompt = PromptLoader(document_type="googlesheet", document_id=google_sheet_id).get_prompt()
+    if prompt == "":
+        prompt = DEFAULT_PROMPT_PATH.read_text(encoding="utf-8")
+    _prompt_cache[google_sheet_id] = (now, prompt)
+    return prompt
+
+
+def clear_prompt_cache() -> None:
+    _prompt_cache.clear()
 
 
 class PromptLoader:

@@ -9,7 +9,19 @@ from fastapi import HTTPException
 from langchain_core.documents import Document
 
 import utils.vector_store as vs_module
-from utils.vector_store import VectorStore, create_vector_store_index, get_vector_store
+from utils.vector_store import (
+    VectorStore,
+    create_vector_store_index,
+    get_vector_store,
+    invalidate_vector_store,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_store_cache():
+    vs_module._stores.clear()
+    yield
+    vs_module._stores.clear()
 
 
 @pytest.fixture()
@@ -170,3 +182,52 @@ class TestFactories:
         get_vector_store("ABC")
         azure["SearchClient"].return_value.get_document_count.assert_not_called()
         mock_create.assert_not_called()
+
+
+class TestStoreCache:
+    def test_verified_store_is_reused_without_new_round_trips(self, azure):
+        count = azure["SearchClient"].return_value.get_document_count
+        count.return_value = 10
+
+        first = get_vector_store("ABC", check_if_exists=True)
+        second = get_vector_store("ABC", check_if_exists=True)
+        third = get_vector_store("abc")  # same index id, no check requested
+
+        assert first is second is third
+        count.assert_called_once()
+        azure["AzureSearch"].assert_called_once()
+
+    def test_unverified_store_is_not_cached(self, azure):
+        azure["SearchClient"].return_value.get_document_count.return_value = 10
+
+        get_vector_store("ABC")
+        get_vector_store("ABC", check_if_exists=True)
+
+        # the unchecked call did not short-circuit the later existence check
+        azure["SearchClient"].return_value.get_document_count.assert_called_once()
+
+    @patch("utils.vector_store.DocumentChunker")
+    @patch("utils.vector_store.DocumentLoader")
+    def test_created_index_replaces_cache_entry(self, mock_loader, mock_chunker, azure):
+        azure["SearchClient"].return_value.get_document_count.return_value = 10
+        stale = get_vector_store("ABC", check_if_exists=True)
+        mock_loader.return_value.load.return_value = [Document(page_content="x")]
+        mock_chunker.return_value.split_documents.return_value = [_chunk("QnAs1", 0)]
+
+        fresh = create_vector_store_index("googlesheet", "ABC", {})
+
+        assert fresh is not stale
+        assert get_vector_store("ABC", check_if_exists=True) is fresh
+
+    def test_invalidate_forces_rebuild(self, azure):
+        azure["SearchClient"].return_value.get_document_count.return_value = 10
+        first = get_vector_store("ABC", check_if_exists=True)
+
+        invalidate_vector_store("ABC")
+        second = get_vector_store("ABC", check_if_exists=True)
+
+        assert second is not first
+        assert azure["SearchClient"].return_value.get_document_count.call_count == 2
+
+    def test_invalidate_unknown_is_noop(self, azure):
+        invalidate_vector_store("never-seen")

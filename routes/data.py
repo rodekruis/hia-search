@@ -9,7 +9,11 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from azure.search.documents.indexes import SearchIndexClient
 from azure.core.credentials import AzureKeyCredential
-from utils.vector_store import create_vector_store_index, googleid_to_vectorstoreid
+from utils.vector_store import (
+    create_vector_store_index,
+    googleid_to_vectorstoreid,
+    invalidate_vector_store,
+)
 from utils.constants import DocumentMetadata
 import os
 
@@ -75,6 +79,7 @@ async def delete_vector_store(
         _ = azure_search_index_client.delete_index(vector_store_id)
     except Exception as ex:
         raise HTTPException(status_code=400, detail=str(ex))
+    invalidate_vector_store(payload.googleSheetId)
 
     return JSONResponse(
         status_code=200, content=f"Deleted vector store index {vector_store_id}."
