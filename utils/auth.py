@@ -80,6 +80,7 @@ async def require_twilio_signature(request: Request) -> None:
                 "googleSheetId": google_sheet_id,
                 "validated_url": str(url),
                 "has_signature": bool(signature),
+                "user_agent": request.headers.get("user-agent"),
                 "host": request.headers.get("host"),
                 "x_forwarded_proto": forwarded_proto,
                 "x_forwarded_host": forwarded_host,
