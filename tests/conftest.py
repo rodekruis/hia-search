@@ -33,6 +33,8 @@ _ENV_DEFAULTS = {
     "MSCOGNITIVE_KEY": "fake-cognitive-key",
     "MSCOGNITIVE_LOCATION": "westeurope",
     "TWILIO_AUTH_TOKEN": "test-twilio-token",
+    # empty (not unset, or load_dotenv would fill it from .env): it overrides TWILIO_AUTH_TOKEN
+    "TWILIO_AUTH_TOKENS": "",
 }
 
 # Force-set so values injected by the shell/.env never leak into tests

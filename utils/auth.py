@@ -64,10 +64,25 @@ async def require_twilio_signature(request: Request) -> None:
     signature = request.headers.get("X-Twilio-Signature", "")
     form = await request.form()
     url = request.url
-    # Behind a TLS-terminating proxy the app sees http; Twilio signed the public https URL.
+    # Behind a TLS-terminating proxy the app sees http://<internal host>; Twilio signed
+    # the public https URL, so rebuild it from the forwarded headers.
     forwarded_proto = request.headers.get("x-forwarded-proto")
     if forwarded_proto and forwarded_proto != url.scheme:
         url = url.replace(scheme=forwarded_proto)
+    forwarded_host = request.headers.get("x-forwarded-host")
+    if forwarded_host and forwarded_host != url.netloc:
+        url = url.replace(netloc=forwarded_host.split(",")[0].strip())
 
     if not RequestValidator(token).validate(str(url), dict(form), signature):
+        logger.warning(
+            "Invalid Twilio signature",
+            extra={
+                "googleSheetId": google_sheet_id,
+                "validated_url": str(url),
+                "has_signature": bool(signature),
+                "host": request.headers.get("host"),
+                "x_forwarded_proto": forwarded_proto,
+                "x_forwarded_host": forwarded_host,
+            },
+        )
         raise HTTPException(status_code=401, detail="Invalid Twilio signature")

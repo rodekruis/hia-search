@@ -588,6 +588,50 @@ class TestChatTwilioWebhook:
     @patch("routes.chat.detect_language", return_value="en")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
+    def test_twilio_signature_honours_forwarded_host(
+        self, mock_get_agent, mock_prompt_loader, mock_detect, mock_vs, client
+    ):
+        """Proxies that rewrite Host must not break validation of the public URL."""
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = _make_agent_response("ok")
+        mock_get_agent.return_value = mock_agent
+
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Hi", "From": "+31612345678"}
+        url = "https://hia.example.org/chat-twilio-webhook?googleSheetId=sheet123"
+        signature = RequestValidator(TWILIO_TOKEN).compute_signature(url, form)
+        resp = client.post(
+            "/chat-twilio-webhook",
+            params=params,
+            data=form,
+            headers={
+                "X-Twilio-Signature": signature,
+                "X-Forwarded-Proto": "https",
+                "X-Forwarded-Host": "hia.example.org",
+            },
+        )
+        assert resp.status_code == 200
+
+    def test_twilio_invalid_signature_logs_validated_url(self, client, caplog):
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Hi", "From": "+31612345678"}
+        with caplog.at_level(logging.WARNING, logger="utils.auth"):
+            resp = client.post(
+                "/chat-twilio-webhook",
+                params=params,
+                data=form,
+                headers={"X-Twilio-Signature": "bogus"},
+            )
+        assert resp.status_code == 401
+        record = next(r for r in caplog.records if r.msg == "Invalid Twilio signature")
+        assert record.validated_url.endswith("/chat-twilio-webhook?googleSheetId=sheet123")
+        assert record.has_signature is True
+        assert TWILIO_TOKEN not in caplog.text
+
+    @patch("routes.chat.get_vector_store")
+    @patch("routes.chat.detect_language", return_value="en")
+    @patch("routes.chat.get_system_prompt", return_value="prompt")
+    @patch("routes.chat.get_rag_agent")
     def test_twilio_missing_body(
         self, mock_get_agent, mock_prompt_loader, mock_detect, mock_vs, client
     ):
