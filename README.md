@@ -85,6 +85,9 @@ See [`example.env`](./example.env) for all required environment variables.
 
 [Set up a HIA instance](https://github.com/rodekruis/helpful-information/blob/main/docs/Guide-How_to_set_up_an_instance.md) and populate its content.
 
+>[!NOTE]
+>The instructions that the chatbot will follow are by default [these ones](config/rag_agent_prompt.txt). If you want to customize them, create a new sheet named `Chat` in your HIA Google Sheet file following [this template](https://docs.google.com/spreadsheets/d/1op6Ouyxtwv4f8GAEAMSn5PVzcXtfZuftMiLYWsX0pbs/edit?pli=1&gid=1707339525#gid=1707339525), then insert the desired instructions under `#VALUE`, cell `B2`. Make sure to follow [best practices in prompt engineering](https://www.promptingguide.ai/introduction/tips); if it's the first time you do this, make sure the CEA Data Specialist reviews what you wrote. Prompt changes take effect within 5 minutes (`PROMPT_CACHE_TTL_S`), without a redeploy.
+
 ### 2. Set up the search service
   - Find the item called `HIA Search API-key(s) [production]` in Bitwarden and copy the value of `API_KEY`
   - Go to the HIA repository's "**Settings**" > "**Secret and variables**" > "**Actions**" > "**New repository secret**"
@@ -118,9 +121,16 @@ https://hia-search.azurewebsites.net/chat-twilio-webhook?googleSheetId=14NZwDa8D
 ```
 The answer will be sent via message directly to the user. The phone number of the user will be used as thread ID, for the chat model to remember the conversation.
 
->[!NOTE]
->The instructions that the chatbot will follow are by default [these ones](config/rag_agent_prompt.txt). If you want to customize them, create a new sheet named `Chat` in your HIA Google Sheet file following [this template](https://docs.google.com/spreadsheets/d/1op6Ouyxtwv4f8GAEAMSn5PVzcXtfZuftMiLYWsX0pbs/edit?pli=1&gid=1707339525#gid=1707339525), then insert the desired instructions under `#VALUE`, cell `B2`. Make sure to follow [best practices in prompt engineering](https://www.promptingguide.ai/introduction/tips); if it's the first time you do this, make sure the CEA Data Specialist reviews what you wrote. Prompt changes take effect within 5 minutes (`PROMPT_CACHE_TTL_S`), without a redeploy.
+The endpoint only accepts requests signed by Twilio, so the service needs the **Auth Token** of the Twilio account that owns the number. To get it:
+1. On the account dashboard (`Account Info` panel at the bottom of the home page) you will find `Account SID` and `Auth Token`. Click the eye icon to reveal the Auth Token and copy it. It is also available under `Account` > `API keys & tokens` > `Auth Tokens`.
+2. Add it to the environment of the deployed service, mapped to the `googleSheetId` used in the webhook URL:
+   ```
+   TWILIO_AUTH_TOKENS={"14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04": "<your Twilio Auth Token>"}
+   ```
+   If you serve multiple HIA instances from different Twilio accounts, add one entry per `googleSheetId`. See [`/chat-twilio-webhook`](#chat-twilio-webhook) for details.
 
+>[!WARNING]
+>The Auth Token grants full access to the Twilio account: treat it as a secret, never commit it to the repository, and rotate it from the Twilio Console if it leaks (the service then needs the new value).
 
 ### 4. Keep your data up to date
 
@@ -193,7 +203,7 @@ It returns the chatbot's response as JSON. Protected with `API_KEY`.
 
 The `/chat-twilio-webhook` endpoint receives incoming messages from Twilio and responds via SMS/WhatsApp. See [Set up the chat service](#3-set-up-the-chat-service) for configuration.
 
-🔐 This endpoint only accepts requests signed by Twilio: the `X-Twilio-Signature` header is validated against the Auth Token of the Twilio account bound to the `googleSheetId` in the URL. Configure either:
+🔐 This endpoint only accepts requests signed by Twilio: the `X-Twilio-Signature` header is validated against the Auth Token of the Twilio account bound to the `googleSheetId` in the URL (see [Set up the chat service](#3-set-up-the-chat-service) for where to find it). Configure either:
 * `TWILIO_AUTH_TOKENS`: a JSON object mapping each `googleSheetId` to its Twilio Auth Token, e.g. `{"14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04": "abc123"}`. Instances without an entry are rejected.
 * `TWILIO_AUTH_TOKEN`: a single Auth Token used for all instances (only when `TWILIO_AUTH_TOKENS` is not set).
 
