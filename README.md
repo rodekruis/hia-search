@@ -87,6 +87,20 @@ See [`example.env`](./example.env) for all required environment variables.
 >
 >Keep the section structure of the default prompt: `# Role`, `# Scope`, `# Answering` (rules for answering from the retrieved documents, e.g. the reply when nothing relevant is found) and `# Conversation`. When the chatbot replies without searching (greetings, thanks, small talk, off-topic requests), [these instance-agnostic rules](config/direct_answer_prompt.txt) are appended to the prompt: they tell the model to follow `# Role`, `# Scope` and `# Conversation` but ignore `# Answering`, so a greeting gets a greeting back instead of the "no information" reply. [Language rules](config/language_prompt.txt) are appended to every prompt as well: chat messages are not machine-translated, so the model always replies in the user's language (fixed replies included) while writing its search queries in English. A custom prompt therefore does not need its own language instructions.
 
+#### Support contacts
+
+Some people who write to the chatbot are upset, frightened or at risk. [Wellbeing rules](config/wellbeing_prompt.txt), inspired by [Psychological First Aid (PFA)](https://mhpsshub.org/resource/a-guide-to-psychological-first-aid-for-red-cross-red-crescent-societies/), are appended to every prompt (also when the `Chat` sheet has its own prompt). The chatbot acknowledges distress, puts safety first and gives the right support contact. These contacts are set per instance in the `Chat` sheet, one row each, with the key under `#KEY` and one contact (preferably a phone number) under `#VALUE`:
+
+| `#KEY` | Contact for |
+|---|---|
+| `#support-emergency` | Emergency services (e.g. `112` in the Netherlands) |
+| `#support-psychosocial_support` | Psychosocial support |
+| `#support-talk_to_staff` | Talking to a staff member of the National Society |
+| `#support-child_protection` | Child protection |
+| `#support-gbv` | Sexual or gender-based violence |
+
+Leave a row out (or its value empty) if there is no such service. Without `#support-emergency`, the chatbot tells people to contact their local emergency services; the fixed replies to messages blocked by the content filter do the same. The chatbot gives these contacts as written and never invents others. Like the prompt, changes take effect within 5 minutes.
+
 ### 2. Set up the search service
   - Find the item called `HIA Search API-key(s) [production]` in Bitwarden and copy the value of `API_KEY`
   - Go to the HIA repository's "**Settings**" > "**Secret and variables**" > "**Actions**" > "**New repository secret**"
