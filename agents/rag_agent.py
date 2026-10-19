@@ -46,8 +46,8 @@ class RagState(MessagesState):
 
 
 def format_context(docs: List[Document]) -> str:
-    """The retrieved documents exactly as they are fed to the model."""
-    return "\n\n".join(f"Document: {doc.page_content}" for doc in docs)
+    """The retrieved documents exactly as they are fed to the model, numbered in rank order."""
+    return "\n\n".join(f"[{index}] {doc.page_content}" for index, doc in enumerate(docs, start=1))
 
 
 def _get_llm():
@@ -154,7 +154,10 @@ def generate(state: RagState, config: RunnableConfig):
         elif message.type == "ai" and message.tool_calls:
             search_query = str(message.tool_calls[0]["args"].get("query", ""))
 
-    system_prompt = f"{_system_prompt(config)}.\n\n{format_context(docs)}"
+    # "(none)" makes an empty search explicit, so the prompt's "no documents"
+    # rule applies instead of the model answering from memory
+    context = format_context(docs) or "(none)"
+    system_prompt = f"{_system_prompt(config).rstrip()}\n\nContext documents:\n{context}"
     prompt = [SystemMessage(system_prompt)] + _conversation(state)
 
     response = _get_llm().invoke(prompt, config=_llm_config(config))

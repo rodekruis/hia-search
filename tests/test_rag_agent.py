@@ -98,13 +98,27 @@ def test_retrieval_turn_keeps_docs_in_state_and_prunes_scaffolding(vector_store)
     # persisted history holds only the human/AI exchange
     assert [m.type for m in result["messages"]] == ["human", "ai"]
 
-    # system prompt from config; docs injected into the generate prompt
+    # system prompt from config; numbered docs under a header in the generate prompt
     direct_rules = rag_agent.get_direct_answer_prompt()
     assert llm.prompts[0][0].content == f"You are HIA.\n\n{direct_rules}"
-    assert "doc A" in llm.prompts[1][0].content and "doc B" in llm.prompts[1][0].content
-    assert llm.prompts[1][0].content.startswith("You are HIA.")
+    assert llm.prompts[1][0].content == "You are HIA.\n\nContext documents:\n[1] doc A\n\n[2] doc B"
     # direct-answer rules would tell the grounded answer to ignore # Answering
     assert direct_rules not in llm.prompts[1][0].content
+
+
+def test_empty_search_is_explicit_in_the_generate_prompt(vector_store):
+    vector_store.return_value.similarity_search_with_score.side_effect = None
+    vector_store.return_value.similarity_search_with_score.return_value = []
+    llm = FakeLLM([_tool_call_msg("housing"), AIMessage(content="I don't have the right information")])
+    graph = rag_agent.build_graph(MemorySaver())
+    # a sheet prompt ending in a newline must not leave a stray "." or blank line
+    config = {"configurable": {**CONFIG["configurable"], "system_prompt": "You are HIA.\n"}}
+
+    with patch.object(rag_agent, "_get_llm", return_value=llm):
+        result = graph.invoke({"messages": [("human", "where can I live?")]}, config)
+
+    assert result["retrieved_docs"] == []
+    assert llm.prompts[1][0].content == "You are HIA.\n\nContext documents:\n(none)"
 
 
 def test_direct_answer_resets_retrieved_docs(vector_store):

@@ -790,7 +790,7 @@ class TestChatTracing:
             "message_en": "[en]Де лікар?",
             "answer_en": "At the GP.",
             "conversation_history": "user: earlier q\nassistant: earlier a",
-            "retrieved_context": "Document: doc A\n\nDocument: doc B",
+            "retrieved_context": "[1] doc A\n\n[2] doc B",
             "search_query": "where is a doctor",
             "top_score": 0.82,
         }

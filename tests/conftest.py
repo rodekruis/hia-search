@@ -52,7 +52,9 @@ sys.modules.setdefault(
     MagicMock(
         get_rag_agent=_mock_get_rag_agent,
         # pure helper, mirrored here so route tests see the real context format
-        format_context=lambda docs: "\n\n".join(f"Document: {d.page_content}" for d in docs),
+        format_context=lambda docs: "\n\n".join(
+            f"[{index}] {d.page_content}" for index, d in enumerate(docs, start=1)
+        ),
     ),
 )
 

@@ -274,7 +274,7 @@ Each chat turn (`/chat-dummy`, `/chat-twilio-webhook`) is one root span named `c
 * `input`: the user's message verbatim, in their language; `output`: the reply as sent to the user
 * `metadata.retrieval_used`, `n_docs`, `detected_lang`
 * `metadata.message_en`, `metadata.answer_en`: the English text the model actually saw and produced, for judges that should not compare across languages
-* `metadata.retrieved_context` (the documents exactly as fed to the model) and `metadata.search_query` (the query the model wrote for retrieval), present only when `retrieval_used` is true
+* `metadata.retrieved_context` (the documents exactly as fed to the model, numbered `[1] …`, `[2] …` in rank order) and `metadata.search_query` (the query the model wrote for retrieval), present only when `retrieval_used` is true
 * `metadata.top_score` and score `top_score` (numeric): best similarity score among the retrieved documents, present only when `retrieval_used` is true
 * `metadata.conversation_history`: prior turns as a plain transcript, current turn excluded
 
