@@ -60,7 +60,7 @@ sequenceDiagram
 1. User sends a query via the `/search`, `/chat-dummy`, or `/chat-twilio-webhook` endpoint.
 2. For `/search`, the query is translated to English (if needed) using Microsoft Cognitive Services. Chat messages are not machine-translated: the LLM reads them as written and writes its search query in English.
 3. Relevant Q&A documents are retrieved from Azure AI Search. For chat endpoints, the LLM first decides whether the message needs a search (greetings and small talk don't; when in doubt it searches) and, in the same call, rewrites follow-ups such as "are you sure?" into a standalone search query using the conversation history. The index holds one document per Q&A or offer (never split into chunks), so search and chat retrieve whole entries; chat retrieves `RETRIEVAL_K` of them (default 10).
-4. For chat endpoints, a LangGraph RAG agent passes the documents + conversation history to Azure OpenAI to generate a response, directly in the user's language.
+4. For chat endpoints, a LangGraph RAG agent passes the documents and conversation history to Azure OpenAI to generate a response, directly in the user's language.
 5. For `/search`, the results are translated to the requested language.
 
 ## Prerequisites
@@ -150,11 +150,11 @@ The `/create-vector-store` endpoint accepts a `googleSheetId` body parameter, fe
 
 If the Q&A sheet is not publicly accessible, you can pass its content under the `data` body parameter. The content must be a valid JSON object structured as the [test-data from the `helpful-information`-app](https://github.com/rodekruis/helpful-information/blob/main/data/test-sheet-id-1/values/Q%26As.json).
 
-🔐 This endpoint is protected with the API_KEY_WRITE environment-variable, to prevent unauthorized users from modifying the index.
+🔐 This endpoint is protected with the `API_KEY_WRITE` environment variable (sent in the `Authorization` header), whether the content comes from the Google Sheet or from `data`, to prevent unauthorized users from modifying the index.
 
 ### `/search`
 
-The `/search` endpoint accepts three parameters:
+The `/search` endpoint accepts four parameters:
 * `query`: the search query
 * `googleSheetId`: the Google Sheet ID
 * `lang`: the language of the search query; results will be translated to this language
@@ -214,9 +214,6 @@ The `/delete-vector-store` endpoint accepts a `googleSheetId` body parameter and
 
 🔐 This endpoint is protected with the `API_KEY_WRITE` environment variable.
 
->[!IMPORTANT]
->Each Q&A or offer is indexed as one document (one `google_index`). Indexes created before this (when long entries were split into chunks) must be rebuilt once: call `/create-vector-store` for each `googleSheetId`, which replaces the index content, or delete it with `/delete-vector-store` so it is recreated on the next request.
-
 ### Errors
 
 Every response carries an `x-request-id` header. Unexpected failures return a structured body you can quote when reporting a problem:
@@ -229,7 +226,7 @@ Every response carries an `x-request-id` header. Unexpected failures return a st
 * `500 internal_error`: unexpected error; details are only in the server logs.
 * `422 validation_error`: invalid input.
 
-The Twilio webhook never returns these: if a reply cannot be generated, the user receives a short fallback message instead. Twilio only waits 15 seconds for the reply, so each chat-model call is bounded by `LLM_TIMEOUT_S` (default 6 s) and is not retried (`LLM_MAX_RETRIES`, default 0): a turn makes up to two calls, and a stalled or throttled call fails in time for the fallback message to be delivered rather than leaving the user without any reply. Reasoning adds latency: if replies start hitting the timeout, lower `LLM_REASONING_EFFORT` (e.g. to `none`) before raising `LLM_TIMEOUT_S`.
+The Twilio webhook never returns these: if a reply cannot be generated, the user receives a short fallback message instead (in English, `FALLBACK_MESSAGE` in `routes/chat.py`). Twilio only waits 15 seconds for the reply, so each chat-model call is bounded by `LLM_TIMEOUT_S` (default 6 s) and is not retried (`LLM_MAX_RETRIES`, default 0): a turn makes up to two calls, and a stalled or throttled call fails in time for the fallback message to be delivered rather than leaving the user without any reply. Reasoning adds latency: if replies start hitting the timeout, lower `LLM_REASONING_EFFORT` (e.g. to `none`) before raising `LLM_TIMEOUT_S`.
 
 ### Logging & privacy
 
@@ -292,13 +289,34 @@ cp example.env .env
 
 Edit the provided [ENV-variables](./example.env) accordingly.
 
+#### Chat tuning
+
+Optional; the defaults suit WhatsApp via Twilio, which waits at most 15 seconds for a reply.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `MODEL_CHAT` | – | Deployment name of the chat model, which must support the Responses API (e.g. `gpt-6-luna`). |
+| `LLM_REASONING_EFFORT` | `low` | `none`, `low`, `medium`, …; higher is slower and may exceed the timeout. |
+| `LLM_TIMEOUT_S` | `6` | Timeout per chat-model call; a turn makes up to two calls. |
+| `LLM_MAX_RETRIES` | `0` | Retries per chat-model call; each retry can push a turn past Twilio's limit. |
+| `RETRIEVAL_K` | `10` | Documents (one per Q&A or offer) retrieved per chat search. |
+| `PROMPT_CACHE_TTL_S` | `300` | How long a sheet's `#system-prompt` is cached. |
+
 ### Run locally
 
 ```sh
 pip install uv
 uv sync
-uv run uvicorn main:app --reload
+uv run python -m uvicorn main:app --reload
 ```
+
+### Run tests
+
+```sh
+uv run python -m pytest tests
+```
+
+Tests are offline: Azure OpenAI, Azure AI Search, Postgres, Twilio and Langfuse are mocked.
 
 ### Run with Docker
 
@@ -306,6 +324,8 @@ uv run uvicorn main:app --reload
 docker build -t hia-search .
 docker run -p 8000:8000 --env-file .env hia-search
 ```
+
+The image runs gunicorn with `WEB_CONCURRENCY` Uvicorn workers (default 2). Each worker opens its own Postgres connection pool (up to 20 connections) for conversation history, so keep `WEB_CONCURRENCY × 20` below the database's `max_connections` before raising it. All workers share the conversation history through Postgres, so any worker can serve any turn.
 
 ### AI Disclaimer
 
