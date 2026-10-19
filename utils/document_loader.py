@@ -156,6 +156,8 @@ class DocumentLoader:
                 "text",
             ]
         ]
+        if df.empty:
+            return df.assign(source="Offers")
 
         # combine fields into column text
         def combine_fields(row):

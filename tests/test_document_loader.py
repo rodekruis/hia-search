@@ -168,6 +168,12 @@ class TestCleanOffersSheet:
         ]:
             assert fragment in text
 
+    def test_sheet_without_offers_returns_empty_frame(self):
+        """Q&A-only instances (e.g. FAU) have an Offers tab with headers but no rows."""
+        df = self.loader._clean_Offers_sheet(_offers_sheet([{"#CATEGORY": None}]))
+        assert df.empty
+        assert "text" in df.columns and "source" in df.columns
+
 
 class TestToDataframe:
     def test_json_uses_first_row_as_header(self):
