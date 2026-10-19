@@ -6,9 +6,75 @@ Search and chat with [HIA](https://github.com/rodekruis/helpful-information).
 
 Synopsis: a [dockerized](https://www.docker.com/) [Python](https://www.python.org/) API to search and chat with [HIA](https://github.com/rodekruis/helpful-information).
 
-Based on [LangChain](https://github.com/langchain-ai/langchain), powered by language models. Uses [Poetry](https://python-poetry.org/) for dependency management and [Azure AI Search](https://learn.microsoft.com/en-us/azure/search/search-what-is-azure-search) for indexing and searching.
+Based on [LangChain](https://github.com/langchain-ai/langchain), powered by language models. Uses [uv](https://docs.astral.sh/uv/) for dependency management and [Azure AI Search](https://learn.microsoft.com/en-us/azure/search/search-what-is-azure-search) for indexing and searching.
 
 Inspired by [`knowledge-enriched-chatbot`](https://github.com/deloitte-nl/knowledge-enriched-chatbot) and [`HIA-search-engine`](https://github.com/PetrovViktor/HIA-search-engine), kudos to the authors.
+
+### Architecture
+
+#### Search
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant API as FastAPI
+    participant T as Azure Translator
+    participant VS as Azure AI Search
+
+    User->>API: query + lang
+    API->>T: translate query to EN
+    T-->>API: English query
+    API->>VS: similarity search
+    VS-->>API: ranked results
+    API->>T: translate results to user lang
+    T-->>API: localized results
+    API-->>User: results JSON
+```
+
+#### Chat
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant API as FastAPI
+    participant Agent as LangGraph RAG Agent
+    participant VS as Azure AI Search
+    participant DB as PostgreSQL
+    participant LLM as Azure OpenAI
+
+    User->>API: message (any language)
+    API->>Agent: invoke with message + thread ID
+    Agent->>DB: load conversation history
+    DB-->>Agent: previous messages
+    Agent->>LLM: search or reply directly? (writes an English query)
+    LLM-->>Agent: retrieve tool call
+    Agent->>VS: retrieve relevant docs
+    VS-->>Agent: Q&A documents (English)
+    Agent->>LLM: prompt + docs + history
+    LLM-->>Agent: response in the user's language
+    Agent->>DB: save new messages
+    Agent-->>API: response
+    API-->>User: answer
+```
+
+1. User sends a query via the `/search`, `/chat-dummy`, or `/chat-twilio-webhook` endpoint.
+2. For `/search`, the query is translated to English (if needed) using Microsoft Cognitive Services. Chat messages are not machine-translated: the LLM reads them as written and writes its search query in English.
+3. Relevant Q&A documents are retrieved from Azure AI Search. For chat endpoints, the LLM first decides whether the message needs a search (greetings and small talk don't; when in doubt it searches) and, in the same call, rewrites follow-ups such as "are you sure?" into a standalone search query using the conversation history. The index holds one document per Q&A or offer (never split into chunks), so search and chat retrieve whole entries; chat retrieves `RETRIEVAL_K` of them (default 10).
+4. For chat endpoints, a LangGraph RAG agent passes the documents and conversation history to Azure OpenAI to generate a response, directly in the user's language.
+5. For `/search`, the results are translated to the requested language.
+
+## Prerequisites
+
+- [Python](https://www.python.org/) 3.12
+- [uv](https://docs.astral.sh/uv/) for dependency management
+- An [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/) deployment (chat + embeddings models). The chat model (e.g. `gpt-6-luna`) is called through the Azure OpenAI [v1 API](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/api-version-lifecycle) (`<OPENAI_ENDPOINT>/openai/v1/`, no `api-version`) on the Responses API, which GPT-6 reasoning models need to call tools while reasoning. It is called without `temperature` (reasoning models reject it), with `LLM_REASONING_EFFORT` (default `low`), and with `store=false` so conversations are not stored by the Responses API. Embeddings still use the classic API with `OPENAI_API_VERSION`.
+- An [Azure AI Search](https://learn.microsoft.com/en-us/azure/search/) service
+- A [PostgreSQL](https://www.postgresql.org/) database (for conversation history)
+- A [Microsoft Cognitive Services](https://learn.microsoft.com/en-us/azure/cognitive-services/translator/) Translator resource (for `/search` and for translating the indexed content to English; chat does not use it)
+- (Optional) A [Twilio](https://www.twilio.com/) account with an active phone/WhatsApp number
+- (Optional) An [Azure Application Insights](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview) resource for monitoring
+
+See [`example.env`](./example.env) for all required environment variables.
 
 ## Usage
 
@@ -16,8 +82,12 @@ Inspired by [`knowledge-enriched-chatbot`](https://github.com/deloitte-nl/knowle
 
 [Set up a HIA instance](https://github.com/rodekruis/helpful-information/blob/main/docs/Guide-How_to_set_up_an_instance.md) and populate its content.
 
-### 2. Set up the search service
+>[!NOTE]
+>The instructions that the chatbot will follow are by default [these ones](config/rag_agent_prompt.txt). If you want to customize them, create a new sheet named `Chat` in your HIA Google Sheet file following [this template](https://docs.google.com/spreadsheets/d/1op6Ouyxtwv4f8GAEAMSn5PVzcXtfZuftMiLYWsX0pbs/edit?pli=1&gid=1707339525#gid=1707339525), then insert the desired instructions under `#VALUE`, cell `B2`. Make sure to follow [best practices in prompt engineering](https://www.promptingguide.ai/introduction/tips); if it's the first time you do this, make sure the CEA Data Specialist reviews what you wrote. Prompt changes take effect within 5 minutes (`PROMPT_CACHE_TTL_S`), without a redeploy.
+>
+>Keep the section structure of the default prompt: `# Role`, `# Scope`, `# Answering` (rules for answering from the retrieved documents, e.g. the reply when nothing relevant is found) and `# Conversation`. When the chatbot replies without searching (greetings, thanks, small talk, off-topic requests), [these instance-agnostic rules](config/direct_answer_prompt.txt) are appended to the prompt: they tell the model to follow `# Role`, `# Scope` and `# Conversation` but ignore `# Answering`, so a greeting gets a greeting back instead of the "no information" reply. [Language rules](config/language_prompt.txt) are appended to every prompt as well: chat messages are not machine-translated, so the model always replies in the user's language (fixed replies included) while writing its search queries in English. A custom prompt therefore does not need its own language instructions.
 
+### 2. Set up the search service
   - Find the item called `HIA Search API-key(s) [production]` in Bitwarden and copy the value of `API_KEY`
   - Go to the HIA repository's "**Settings**" > "**Secret and variables**" > "**Actions**" > "**New repository secret**"
   - Name the secret: `SEARCH_API_KEY`and insert the API Key as value
@@ -40,7 +110,7 @@ Inspired by [`knowledge-enriched-chatbot`](https://github.com/deloitte-nl/knowle
   - Redeploy HIA by triggering the deployment workflow: `Actions` > `Deploy to GitHub Pages` > `Run workflow`
   
 
-### 2. Set up the chat service
+### 3. Set up the chat service
 
 The chat service is based on [Twilio incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook). You need an active Twilio account and an active phone or WhatsApp number, see [how to buy one](https://help.twilio.com/articles/223135247-How-to-Search-for-and-Buy-a-Twilio-Phone-Number-from-Console).
 
@@ -50,13 +120,20 @@ https://hia-search.azurewebsites.net/chat-twilio-webhook?googleSheetId=14NZwDa8D
 ```
 The answer will be sent via message directly to the user. The phone number of the user will be used as thread ID, for the chat model to remember the conversation.
 
->[!NOTE]
->The instructions that the chatbot will follow are by default [these ones](config/rag_agent_prompt.txt). If you want to customize them, create a new sheet named `Chat` in your HIA Google Sheet file following [this template](https://docs.google.com/spreadsheets/d/1op6Ouyxtwv4f8GAEAMSn5PVzcXtfZuftMiLYWsX0pbs/edit?pli=1&gid=1707339525#gid=1707339525), then insert the desired instructions under `#VALUE`, cell `B2`. Make sure to follow [best practices in prompt engineering](https://www.promptingguide.ai/introduction/tips); if it's the first time you do this, make sure the CEA Data Specialist reviews what you wrote.
+The endpoint only accepts requests signed by Twilio, so the service needs the **Auth Token** of the Twilio account that owns the number. To get it:
+1. On the account dashboard (`Account Info` panel at the bottom of the home page) you will find `Account SID` and `Auth Token`. Click the eye icon to reveal the Auth Token and copy it. It is also available under `Account` > `API keys & tokens` > `Auth Tokens`.
+2. Add it to the environment of the deployed service, mapped to the `googleSheetId` used in the webhook URL:
+   ```
+   TWILIO_AUTH_TOKENS={"14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04": "<your Twilio Auth Token>"}
+   ```
+   If you serve multiple HIA instances from different Twilio accounts, add one entry per `googleSheetId`. See [`/chat-twilio-webhook`](#chat-twilio-webhook) for details.
 
+>[!WARNING]
+>The Auth Token grants full access to the Twilio account: treat it as a secret, never commit it to the repository, and rotate it from the Twilio Console if it leaks (the service then needs the new value).
 
-### 3. Keep your data up to date
+### 4. Keep your data up to date
 
-Both the chat and search services need HIA content to be transformed into _embeddings_, i.e. numerical representations of text that capture semantic meaning in a high-dimensional vector space. Embeddings are stored in dedicated databases called _vector stores_. When searching or chatting with HIA, the user query 
+Both the chat and search services need HIA content to be transformed into _embeddings_, i.e. numerical representations of text that capture semantic meaning in a high-dimensional vector space. Embeddings are stored in dedicated databases called _vector stores_. When searching or chatting with HIA, the user query is compared against these embeddings to find the most relevant Q&A pairs.
 
 Generating and storing the embeddings of your specific HIA instance is done automatically the first time you call the chat or search endpoints, if the HIA Google Sheet file is publicly accessible. If the Google Sheet file is not publicly accessible or you need to update it, you can use the  `/create-vector-store` endpoint, which you can call directly from [the swagger UI](https://hia-search.azurewebsites.net). You will need to authenticate with `API_KEY_WRITE`, which you find in Bitwarden. See API reference below.
 
@@ -69,15 +146,15 @@ If not here, see the [`/docs`](https://hia-search.azurewebsites.net/docs).
 
 ### `/create-vector-store`
 
-The `/create-vector-store` endpoint accepts a `googleSheetId` body parameter, fetches all data from the Q&A sheet, and creates an [index](https://learn.microsoft.com/en-us/azure/search/search-what-is-an-index) in Azure AI Search, Azure's native vector database. If the index already exists, its content will be updated.
+The `/create-vector-store` endpoint accepts a `googleSheetId` body parameter, fetches all data from the Q&A sheet, and creates an [index](https://learn.microsoft.com/en-us/azure/search/search-what-is-an-index) in Azure AI Search, Azure's native vector database. If the index already exists, its content will be updated. The rebuild runs within the request and can take a few minutes for large sheets (every entry is translated and embedded); it does not hold up chat or search requests meanwhile. The response reports the number of documents indexed.
 
 If the Q&A sheet is not publicly accessible, you can pass its content under the `data` body parameter. The content must be a valid JSON object structured as the [test-data from the `helpful-information`-app](https://github.com/rodekruis/helpful-information/blob/main/data/test-sheet-id-1/values/Q%26As.json).
 
-🔐 This endpoint is protected with the API_KEY_WRITE environment-variable, to prevent unauthorized users from modifying the index.
+🔐 This endpoint is protected with the `API_KEY_WRITE` environment variable (sent in the `Authorization` header), whether the content comes from the Google Sheet or from `data`, to prevent unauthorized users from modifying the index.
 
 ### `/search`
 
-The `/search` endpoint accepts three parameters:
+The `/search` endpoint accepts four parameters:
 * `query`: the search query
 * `googleSheetId`: the Google Sheet ID
 * `lang`: the language of the search query; results will be translated to this language
@@ -111,6 +188,99 @@ and returns a list of relevant questions and answers, in this format:
 
  This endpoint is protected with the `API_KEY` environment variable. As this key will be stored by the client-application in plain-text, visible in the browser, it should be considered public. Its main purpose is to prevent abuse of the API by unauthorized users (with possible future measures against it).
 
+### `/chat-dummy`
+
+The `/chat-dummy` endpoint is a test/development chat endpoint that accepts:
+* `message` (body): the user message
+* `googleSheetId` (query, optional): the Google Sheet ID (defaults to a test sheet)
+* `threadId` (query, optional): a conversation thread ID (max 200 chars); if omitted, a new random one is generated. The response includes the `threadId` used, so pass it back to continue the same conversation
+* `include_context` (query, optional): when `true`, the response includes the retrieved context documents
+
+It returns the chatbot's response as JSON. Protected with `API_KEY`.
+
+### `/chat-twilio-webhook`
+
+The `/chat-twilio-webhook` endpoint receives incoming messages from Twilio and responds via SMS/WhatsApp. See [Set up the chat service](#3-set-up-the-chat-service) for configuration.
+
+🔐 This endpoint only accepts requests signed by Twilio: the `X-Twilio-Signature` header is validated against the Auth Token of the Twilio account bound to the `googleSheetId` in the URL (see [Set up the chat service](#3-set-up-the-chat-service) for where to find it). Configure either:
+* `TWILIO_AUTH_TOKENS`: a JSON object mapping each `googleSheetId` to its Twilio Auth Token, e.g. `{"14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04": "abc123"}`. Instances without an entry are rejected.
+* `TWILIO_AUTH_TOKEN`: a single Auth Token used for all instances (only when `TWILIO_AUTH_TOKENS` is not set).
+
+Requests without a valid signature are rejected with 401.
+
+### `/delete-vector-store`
+
+The `/delete-vector-store` endpoint accepts a `googleSheetId` body parameter and deletes the corresponding Azure AI Search index.
+
+🔐 This endpoint is protected with the `API_KEY_WRITE` environment variable.
+
+### Errors
+
+Every response carries an `x-request-id` header. Unexpected failures return a structured body you can quote when reporting a problem:
+
+```json
+{"error": {"code": "external_service_error", "message": "An upstream service failed; please retry later", "request_id": "req_..."}}
+```
+
+* `502 external_service_error`: Azure OpenAI, Azure AI Search or the checkpoint database failed.
+* `500 internal_error`: unexpected error; details are only in the server logs.
+* `422 validation_error`: invalid input.
+
+The Twilio webhook never returns these: if a reply cannot be generated, the user receives a short fallback message instead (in English, `FALLBACK_MESSAGE` in `routes/chat.py`). Twilio only waits 15 seconds for the reply, so each chat-model call is bounded by `LLM_TIMEOUT_S` (default 6 s) and is not retried (`LLM_MAX_RETRIES`, default 0): a turn makes up to two calls, and a stalled or throttled call fails in time for the fallback message to be delivered rather than leaving the user without any reply. Reasoning adds latency: if replies start hitting the timeout, lower `LLM_REASONING_EFFORT` (e.g. to `none`) before raising `LLM_TIMEOUT_S`.
+
+### Logging & privacy
+
+Application logs (Azure Application Insights) contain **metadata only**: sheet id, hashed thread id, whether retrieval was used, message/response lengths, durations and error traces. Every record also carries `environment` (from `ENVIRONMENT`, default `prod`) so dev and prod can be separated in queries. User messages, replies, search queries and phone numbers are never written to application logs. Conversation content is recorded exclusively in Langfuse (see below), with its own access control and retention.
+
+### Application Insights (infrastructure telemetry)
+
+Set `APPLICATIONINSIGHTS_CONNECTION_STRING` to export via the [Azure Monitor OpenTelemetry distro](https://learn.microsoft.com/azure/azure-monitor/app/opentelemetry-enable?tabs=python) (unset = console logging only). Besides logs you get, with no code in the handlers:
+
+* `requests`: one row per HTTP request (route, status, duration), `/health` excluded.
+* `dependencies`: one row per outbound call — Azure OpenAI, Azure AI Search, the Postgres checkpoint store, Cognitive Services, Google Sheets — so a slow turn can be broken down per stage.
+* `exceptions`, and log↔request correlation via `operation_Id`.
+
+Requests and dependencies carry the `environment` custom dimension as well; the resource is `service.name = hia-search`.
+
+Application Insights and Langfuse run on **separate OpenTelemetry tracer providers**: Langfuse spans (which carry prompts, completions and user text) are never exported to Application Insights, and HTTP/DB spans are never exported to Langfuse. Both share one trace id per request, so a Langfuse trace and its App Insights waterfall can be matched by id.
+
+> [!NOTE]
+> On Azure App Service, disable the built-in auto-instrumentation (`ApplicationInsightsAgent_EXTENSION_VERSION=disabled`) so telemetry is not collected twice.
+
+### Observability & evaluation (Langfuse)
+
+Search and chat are traced into **two separate Langfuse projects** (distinct keys, same `LANGFUSE_BASE_URL`): `LANGFUSE_SEARCH_PUBLIC_KEY`/`LANGFUSE_SEARCH_SECRET_KEY` and `LANGFUSE_CHAT_PUBLIC_KEY`/`LANGFUSE_CHAT_SECRET_KEY`. A project whose keys are unset is simply not traced. `ENVIRONMENT` namespaces traces in both.
+
+#### Search
+
+Each `/search` request is one root span named `search`, tagged `sheet:<googleSheetId>`, `channel:search`, `lang:<lang>`:
+
+* `input`: the query as used for retrieval (English)
+* `output`: the retrieved Q&As as a numbered `[n] Q: … A: …` block
+* `metadata.search_query`, `metadata.retrieved_context`: same content, under the keys the chat traces use, so one evaluator mapping serves both channels
+* `metadata.original_query`, `lang`, `k`, `n_results`, `top_score`
+* scores `top_score` (numeric), `n_results` (numeric), `zero_results` (boolean), written by the app
+
+#### Chat
+
+Each chat turn (`/chat-dummy`, `/chat-twilio-webhook`) is one root span named `chat-turn`, with `session_id` = `user_id` = the thread id (hashed sender on Twilio), tagged `sheet:<googleSheetId>`, `channel:twilio|dummy`. The LangGraph steps (`query_or_respond`, `tools`, `generate`) nest underneath with model, tokens and cost.
+
+* `input`: the user's message verbatim, in their language; `output`: the reply as sent to the user, written by the model in the user's language (no machine translation)
+* `metadata.retrieval_used`, `n_docs`
+* `metadata.retrieved_context` (the documents exactly as fed to the model, numbered `[1] …`, `[2] …` in rank order) and `metadata.search_query` (the query the model wrote for retrieval), present only when `retrieval_used` is true
+* `metadata.top_score` and score `top_score` (numeric): best similarity score among the retrieved documents, present only when `retrieval_used` is true
+* `metadata.conversation_history`: prior turns as a plain transcript, current turn excluded
+
+`/chat-dummy` returns `traceId`; `POST /feedback` `{"traceId": ..., "positive": true|false, "comment": ...}` (read key) records it as a `user-feedback` score (1/0) on that trace. It returns 503 when chat tracing is disabled.
+
+#### Evaluators
+
+Configure **observation-level** evaluators (filter *Is Root Observation*; trace-level evaluators are deprecated):
+
+* Retrieval quality / missing content, both projects: `{{query}}` → Metadata `$.search_query`, `{{context}}` → Metadata `$.retrieved_context`. On chat, filter `metadata.retrieval_used = true` so small talk is skipped. Use rule filters (`top_score` below a threshold, on both projects, or `zero_results = true` on search, plus a small random sample) to run LLM judges only where it pays; a boolean "is the question answered by any of these documents?" judge yields the missing-content list per sheet.
+* Faithfulness on chat: `{{answer}}` → Output, `{{context}}` → Metadata `$.retrieved_context`, `{{question}}` → Metadata `$.search_query`. The answer is in the user's language and the context in English, so tell the judge to compare across languages.
+* User-facing judges (e.g. distress detection) on chat: `{{history}}` → Metadata `$.conversation_history`, `{{message}}` → Input.
+
 ## Configuration
 
 ```sh
@@ -119,18 +289,44 @@ cp example.env .env
 
 Edit the provided [ENV-variables](./example.env) accordingly.
 
+#### Chat tuning
+
+Optional; the defaults suit WhatsApp via Twilio, which waits at most 15 seconds for a reply.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `MODEL_CHAT` | – | Deployment name of the chat model, which must support the Responses API (e.g. `gpt-6-luna`). |
+| `LLM_REASONING_EFFORT` | `low` | `none`, `low`, `medium`, …; higher is slower and may exceed the timeout. |
+| `LLM_TIMEOUT_S` | `6` | Timeout per chat-model call; a turn makes up to two calls. |
+| `LLM_MAX_RETRIES` | `0` | Retries per chat-model call; each retry can push a turn past Twilio's limit. |
+| `RETRIEVAL_K` | `10` | Documents (one per Q&A or offer) retrieved per chat search. |
+| `PROMPT_CACHE_TTL_S` | `300` | How long a sheet's `#system-prompt` is cached. |
+
 ### Run locally
 
 ```sh
-pip install poetry
-poetry install --no-root
-python -m spacy download en_core_web_sm
-uvicorn main:app --reload
+pip install uv
+uv sync
+uv run python -m uvicorn main:app --reload
 ```
+
+### Run tests
+
+```sh
+uv run python -m pytest tests
+```
+
+Tests are offline: Azure OpenAI, Azure AI Search, Postgres, Twilio and Langfuse are mocked.
 
 ### Run with Docker
 
 ```sh
 docker build -t hia-search .
+docker run -p 8000:8000 --env-file .env hia-search
 ```
 
+The image runs gunicorn with `WEB_CONCURRENCY` Uvicorn workers (default 2). Each worker opens its own Postgres connection pool (up to 20 connections) for conversation history, so keep `WEB_CONCURRENCY × 20` below the database's `max_connections` before raising it. All workers share the conversation history through Postgres, so any worker can serve any turn.
+
+### AI Disclaimer
+
+Parts of the code in this repository were written and reviewed with the assistance of AI tools, including large language models (LLMs). All AI-generated code has been reviewed by human contributors before being merged. The humans involved take responsibility for the correctness and quality of the code. If you have questions or concerns, please contact the maintainers.

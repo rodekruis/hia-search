@@ -1,7 +1,52 @@
+import functools
+import logging
+import os
+import time
 import urllib
+from pathlib import Path
+
 import pandas as pd
-from utils.logger import logger
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_PROMPT_PATH = Path(__file__).resolve().parent.parent / "config" / "rag_agent_prompt.txt"
+DIRECT_ANSWER_PROMPT_PATH = Path(__file__).resolve().parent.parent / "config" / "direct_answer_prompt.txt"
+LANGUAGE_PROMPT_PATH = Path(__file__).resolve().parent.parent / "config" / "language_prompt.txt"
+
+# Cache the system prompt to reduce latency.
+PROMPT_CACHE_TTL_S = float(os.environ.get("PROMPT_CACHE_TTL_S", "300"))
+_prompt_cache: dict[str, tuple[float, str]] = {}
+
+
+def get_system_prompt(google_sheet_id: str) -> str:
+    """System prompt for a HIA instance: its sheet's `#system-prompt`, else the default file."""
+    now = time.monotonic()
+    cached = _prompt_cache.get(google_sheet_id)
+    if cached is not None and now - cached[0] < PROMPT_CACHE_TTL_S:
+        return cached[1]
+
+    prompt = PromptLoader(document_type="googlesheet", document_id=google_sheet_id).get_prompt()
+    if prompt == "":
+        prompt = DEFAULT_PROMPT_PATH.read_text(encoding="utf-8")
+    _prompt_cache[google_sheet_id] = (now, prompt)
+    return prompt
+
+
+def clear_prompt_cache() -> None:
+    _prompt_cache.clear()
+
+
+@functools.cache
+def get_direct_answer_prompt() -> str:
+    """Instance-agnostic rules for turns answered without retrieval (greetings, small talk, off-topic)."""
+    return DIRECT_ANSWER_PROMPT_PATH.read_text(encoding="utf-8").strip()
+
+
+@functools.cache
+def get_language_prompt() -> str:
+    """Instance-agnostic rules to reply in the user's language; chat messages are not machine-translated."""
+    return LANGUAGE_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 class PromptLoader:

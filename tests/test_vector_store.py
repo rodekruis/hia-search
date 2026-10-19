@@ -1,0 +1,233 @@
+"""Tests for utils/vector_store.py with Azure/OpenAI clients mocked."""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+from fastapi import HTTPException
+from langchain_core.documents import Document
+
+import utils.vector_store as vs_module
+from utils.vector_store import (
+    VectorStore,
+    create_vector_store_index,
+    get_vector_store,
+    invalidate_vector_store,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_store_cache():
+    vs_module._stores.clear()
+    yield
+    vs_module._stores.clear()
+
+
+@pytest.fixture()
+def azure(monkeypatch):
+    """Patch every external client used by VectorStore; yields the mocks."""
+    mocks = {}
+    for name in ("AzureOpenAIEmbeddings", "SearchClient", "AzureSearch", "SearchIndexClient"):
+        mock = MagicMock(name=name)
+        monkeypatch.setattr(vs_module, name, mock)
+        mocks[name] = mock
+    mocks["AzureOpenAIEmbeddings"].return_value.embed_query.return_value = [0.0] * 3
+    yield mocks
+
+
+def _store(**overrides) -> VectorStore:
+    params = dict(
+        store_path="https://search.example",
+        store_service="azuresearch",
+        store_password="pw",
+        embedding_source="OpenAI",
+        embedding_model="emb-model",
+        store_id="idx",
+    )
+    params.update(overrides)
+    return VectorStore(**params)
+
+
+def _entry(google_index: str, text: str = "t") -> Document:
+    return Document(page_content=text, metadata={"google_index": google_index})
+
+
+class TestConstruction:
+    def test_wires_azure_clients(self, azure):
+        store = _store()
+        azure["AzureOpenAIEmbeddings"].assert_called_once()
+        assert azure["AzureOpenAIEmbeddings"].call_args.kwargs["deployment"] == "emb-model"
+        azure["SearchClient"].assert_called_once()
+        assert azure["SearchClient"].call_args.kwargs["index_name"] == "idx"
+        assert azure["AzureSearch"].call_args.kwargs["index_name"] == "idx"
+        assert store.embedder is azure["AzureOpenAIEmbeddings"].return_value
+
+    def test_unknown_embedding_source_raises_500(self, azure):
+        with pytest.raises(HTTPException) as exc:
+            _store(embedding_source="cohere")
+        assert exc.value.status_code == 500
+
+    def test_unknown_store_service_raises_500(self, azure):
+        with pytest.raises(HTTPException) as exc:
+            _store(store_service="pinecone")
+        assert exc.value.status_code == 500
+
+    def test_huggingface_defaults_model(self, azure, monkeypatch):
+        hf = MagicMock()
+        monkeypatch.setattr(vs_module, "HuggingFaceEmbeddings", hf)
+        store = _store(embedding_source="huggingface", embedding_model=None)
+        hf.assert_called_once_with(model_name=vs_module.DEFAULT_HUGGING_FACE_MODEL)
+        assert store.embedding_model == vs_module.DEFAULT_HUGGING_FACE_MODEL
+
+
+class TestAddDocuments:
+    def test_empty_input_adds_nothing(self, azure):
+        store = _store()
+        assert not store.add_documents([])
+        store.langchain_client.add_texts.assert_not_called()
+
+    def test_adds_texts_with_ids_and_embedding_model_metadata(self, azure):
+        store = _store()
+        store.client.get_document_count.return_value = 0
+        entries = [_entry("QnAs1", "a"), _entry("QnAs2", "b"), _entry("Offers3", "c")]
+
+        n = store.add_documents(entries)
+
+        assert n == 3
+        assert store.n_documents_added == 3
+        kwargs = store.langchain_client.add_texts.call_args.kwargs
+        assert kwargs["texts"] == ["a", "b", "c"]
+        # one entry per Q&A/offer: the google_index is the document key
+        assert kwargs["ids"] == ["QnAs1", "QnAs2", "Offers3"]
+        assert all(m["embedding_model"] == "emb-model" for m in kwargs["metadatas"])
+        # caller's metadata is left untouched
+        assert "embedding_model" not in entries[0].metadata
+        azure["SearchIndexClient"].return_value.delete_index.assert_not_called()
+
+    def test_replaces_existing_index_when_not_empty(self, azure):
+        store = _store()
+        store.client.get_document_count.return_value = 42
+
+        store.add_documents([_entry("QnAs1")])
+
+        index_client = azure["SearchIndexClient"].return_value
+        index_client.delete_index.assert_called_once_with("idx")
+        created = index_client.create_index.call_args.args[0]
+        assert created.name == "idx"
+        assert {f.name for f in created.fields} == {"id", "content", "content_vector", "metadata"}
+        vector_field = next(f for f in created.fields if f.name == "content_vector")
+        assert vector_field.vector_search_dimensions == 3
+
+
+class TestReads:
+    def test_count_and_get_documents_delegate_to_search_client(self, azure):
+        store = _store()
+        store.client.get_document_count.return_value = 5
+        store.client.search.return_value = iter([{"id": "1"}, {"id": "2"}])
+
+        assert store.count_documents() == 5
+        assert store.get_documents() == [{"id": "1"}, {"id": "2"}]
+        store.client.search.assert_called_once_with(search_text="*")
+
+    def test_similarity_search_delegates_to_langchain_client(self, azure):
+        store = _store()
+        store.similarity_search("q", k=3)
+        store.langchain_client.similarity_search.assert_called_once_with(query="q", k=3)
+        store.similarity_search_with_score("q", k=2)
+        store.langchain_client.similarity_search_with_score.assert_called_once_with(query="q", k=2)
+
+
+class TestFactories:
+    @patch("utils.vector_store.DocumentLoader")
+    def test_create_index_with_no_documents_raises_400(self, mock_loader, azure):
+        mock_loader.return_value.load.return_value = []
+        with pytest.raises(HTTPException) as exc:
+            create_vector_store_index("googlesheet", "Sheet_1", {})
+        assert exc.value.status_code == 400
+
+    @patch("utils.vector_store.DocumentLoader")
+    def test_create_index_adds_one_entry_per_loaded_document(self, mock_loader, azure):
+        docs = [_entry("QnAs1", "x"), _entry("Offers2", "y")]
+        mock_loader.return_value.load.return_value = docs
+        azure["SearchClient"].return_value.get_document_count.return_value = 0
+
+        store = create_vector_store_index("json", "Sheet_1", {"values": []})
+
+        mock_loader.assert_called_once_with(
+            document_type="json", document_id="Sheet_1", document_data={"values": []}
+        )
+        assert store.store_id == "sheet1"
+        # loaded documents are indexed as they are, never split into chunks
+        kwargs = store.langchain_client.add_texts.call_args.kwargs
+        assert kwargs["texts"] == ["x", "y"]
+        assert kwargs["ids"] == ["QnAs1", "Offers2"]
+
+    @patch("utils.vector_store.create_vector_store_index")
+    def test_get_vector_store_returns_existing(self, mock_create, azure):
+        azure["SearchClient"].return_value.get_document_count.return_value = 10
+        store = get_vector_store("ABC", check_if_exists=True)
+        assert store.store_id == "abc"
+        mock_create.assert_not_called()
+
+    @patch("utils.vector_store.create_vector_store_index")
+    def test_get_vector_store_creates_when_missing(self, mock_create, azure):
+        azure["SearchClient"].return_value.get_document_count.return_value = 0
+        store = get_vector_store("ABC", check_if_exists=True)
+        mock_create.assert_called_once_with(
+            document_type="googlesheet", document_id="ABC", document_data={}
+        )
+        assert store is mock_create.return_value
+
+    @patch("utils.vector_store.create_vector_store_index")
+    def test_get_vector_store_skips_check_by_default(self, mock_create, azure):
+        get_vector_store("ABC")
+        azure["SearchClient"].return_value.get_document_count.assert_not_called()
+        mock_create.assert_not_called()
+
+
+class TestStoreCache:
+    def test_verified_store_is_reused_without_new_round_trips(self, azure):
+        count = azure["SearchClient"].return_value.get_document_count
+        count.return_value = 10
+
+        first = get_vector_store("ABC", check_if_exists=True)
+        second = get_vector_store("ABC", check_if_exists=True)
+        third = get_vector_store("abc")  # same index id, no check requested
+
+        assert first is second is third
+        count.assert_called_once()
+        azure["AzureSearch"].assert_called_once()
+
+    def test_unverified_store_is_not_cached(self, azure):
+        azure["SearchClient"].return_value.get_document_count.return_value = 10
+
+        get_vector_store("ABC")
+        get_vector_store("ABC", check_if_exists=True)
+
+        # the unchecked call did not short-circuit the later existence check
+        azure["SearchClient"].return_value.get_document_count.assert_called_once()
+
+    @patch("utils.vector_store.DocumentLoader")
+    def test_created_index_replaces_cache_entry(self, mock_loader, azure):
+        azure["SearchClient"].return_value.get_document_count.return_value = 10
+        stale = get_vector_store("ABC", check_if_exists=True)
+        mock_loader.return_value.load.return_value = [_entry("QnAs1")]
+
+        fresh = create_vector_store_index("googlesheet", "ABC", {})
+
+        assert fresh is not stale
+        assert get_vector_store("ABC", check_if_exists=True) is fresh
+
+    def test_invalidate_forces_rebuild(self, azure):
+        azure["SearchClient"].return_value.get_document_count.return_value = 10
+        first = get_vector_store("ABC", check_if_exists=True)
+
+        invalidate_vector_store("ABC")
+        second = get_vector_store("ABC", check_if_exists=True)
+
+        assert second is not first
+        assert azure["SearchClient"].return_value.get_document_count.call_count == 2
+
+    def test_invalidate_unknown_is_noop(self, azure):
+        invalidate_vector_store("never-seen")

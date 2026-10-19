@@ -1,26 +1,18 @@
 from __future__ import annotations
 import uvicorn
+from contextlib import asynccontextmanager
 from fastapi import (
     FastAPI,
 )
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from routes import search, data, chat
+from agents.rag_agent import init_rag_agent, close_rag_agent
+from utils.errors import register_exception_handlers
+from utils.middleware import RequestIdMiddleware
+from utils.telemetry import configure_telemetry, instrument_app
+from utils.tracing import init_tracing, shutdown_tracing
 import os
-import logging
-import sys
-
-logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
-handler = logging.StreamHandler(sys.stdout)
-handler.setLevel(logging.INFO)
-formatter = logging.Formatter("%(asctime)s : %(levelname)s : %(message)s")
-handler.setFormatter(formatter)
-logger.addHandler(handler)
-logging.getLogger("requests").setLevel(logging.WARNING)
-logging.getLogger("urllib3").setLevel(logging.WARNING)
-logging.getLogger("azure").setLevel(logging.WARNING)
-logging.getLogger("requests_oauthlib").setLevel(logging.WARNING)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -57,6 +49,21 @@ tags_metadata = [
     },
 ]
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Runs once per worker process: the first user must not pay for pool setup,
+    # and a bad DB config must fail the boot instead of the first chat turn.
+    # Order matters: App Insights claims the global TracerProvider first, Langfuse
+    # then attaches to its own; the DB pool opens after psycopg is instrumented.
+    configure_telemetry()
+    init_tracing()
+    init_rag_agent()
+    yield
+    shutdown_tracing()
+    close_rag_agent()
+
+
 # initialize FastAPI
 app = FastAPI(
     title="hia-search",
@@ -67,6 +74,7 @@ app = FastAPI(
         "url": "https://www.gnu.org/licenses/agpl-3.0.en.html",
     },
     openapi_tags=tags_metadata,
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -76,12 +84,22 @@ app.add_middleware(
     allow_methods=["POST"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestIdMiddleware)
+register_exception_handlers(app)
+# must happen before the first ASGI call (the lifespan), see utils.telemetry
+instrument_app(app)
 
 
 @app.get("/", include_in_schema=False)
 async def docs_redirect():
     """Redirect base URL to docs."""
     return RedirectResponse(url="/docs")
+
+
+@app.get("/health", include_in_schema=False)
+async def health():
+    """Liveness probe for container orchestration."""
+    return {"status": "ok"}
 
 
 # Include routes

@@ -1,24 +1,24 @@
 from __future__ import annotations
 
 import pandas as pd
-from fastapi import Depends, APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from utils.vector_store import get_vector_store
 from utils.constants import DocumentMetadata
 import json
-from utils.logger import logger
+import logging
 import orjson
 from typing import Any
 from utils.translator import translate
+from utils.tracing import observe
 import os
+
+logger = logging.getLogger(__name__)
 
 dm = DocumentMetadata()
 
 router = APIRouter()
-
-key_query_scheme = APIKeyHeader(name="Authorization")
 
 
 def get_score_google_index(docs_and_scores, google_index: str) -> float:
@@ -49,8 +49,8 @@ class SearchPayload(BaseModel):
         description="""Text of the search query""",
     )
     googleSheetId: str = Field(
-        ...,
-        description="""HIA Google sheet ID""",
+        "14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04",
+        description="""HIA Google Spreadsheet ID""",
     )
     k: int = Field(
         5,
@@ -60,40 +60,20 @@ class SearchPayload(BaseModel):
         "en",
         description="""Language of the search query; results will be translated to this language""",
     )
-
-
-@router.post("/search", tags=["search"])
-async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme)):
-    """Search HIA."""
-
-    if api_key != os.environ["API_KEY"]:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    # load vector store
-    vector_store = get_vector_store(payload.googleSheetId, check_if_exists=True)
-
-    # translate if necessary
-    if payload.lang != "en":
-        payload.query = translate(
-            from_lang=payload.lang, to_lang="en", text=payload.query
-        )
-
-    # log query
-    extra_logs = {"googleSheetId": payload.googleSheetId, "lang": payload.lang}
-    logger.info(f"query: {payload.query}", extra=extra_logs)
-
-    # retrieve documents
-    docs_and_scores = vector_store.similarity_search_with_score(
-        query=payload.query, k=payload.k
+    source: str = Field(
+        "Q&As",
+        description="""Source sheet of the search; can only be 'Q&As'""",
     )
 
-    # build results they way HIA likes them
+
+def _build_results(docs_and_scores, vector_store) -> list[dict]:
+    """Build results the way HIA likes them: parents with children, children promoted to their parent."""
     df = pd.DataFrame.from_records(
         [
             json.loads(doc["metadata"], strict=False)
             for doc in vector_store.get_documents()
         ]
-    )  # load all documents from vector store
+    )  # load all documents from vector store, needed to find parent and child questions for results
     results = []
     for doc_and_score in docs_and_scores:
         doc = doc_and_score[0]
@@ -170,6 +150,67 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
     # remove google_index from results
     for result in results:
         result.pop(dm.GOOGLE_INDEX)
+    return results
+
+
+def _retrieved_context(docs_and_scores) -> str:
+    """Numbered Q&A block, same shape as the chat-turn span's `retrieved_context`."""
+    return "\n\n".join(
+        f"[{index}] Q: {doc.metadata[dm.QUESTION]}\nA: {doc.metadata[dm.ANSWER]}"
+        for index, (doc, _score) in enumerate(docs_and_scores, start=1)
+    )
+
+
+def _record_search(span, payload: SearchPayload, original_query: str, docs_and_scores, results) -> None:
+    """Write everything an observation-level evaluator needs onto the root span."""
+    context = _retrieved_context(docs_and_scores)
+    top_score = max((score for _doc, score in docs_and_scores), default=0.0)
+    span.update(
+        output=context,
+        metadata={
+            # same keys as chat-turn so one evaluator mapping serves both channels
+            "search_query": payload.query,
+            "retrieved_context": context,
+            "original_query": original_query,
+            "lang": payload.lang,
+            "k": payload.k,
+            "n_results": len(results),
+            "top_score": top_score,
+        },
+    )
+    # cheap deterministic scores: pre-filter for LLM judges and trendable on their own
+    span.score(name="top_score", value=float(top_score), data_type="NUMERIC")
+    span.score(name="n_results", value=float(len(results)), data_type="NUMERIC")
+    span.score(name="zero_results", value=len(results) == 0, data_type="BOOLEAN")
+
+
+# Plain `def`: embedding, search and translation are blocking HTTP calls and must
+# run in the threadpool, not on the event loop.
+@router.post("/search", tags=["search"])
+def search(payload: SearchPayload):
+    """Search HIA."""
+
+    if payload.source not in ["Q&As"]:
+        raise HTTPException(status_code=400, detail="Invalid source; must be 'Q&As'")
+
+    # load vector store
+    vector_store = get_vector_store(payload.googleSheetId, check_if_exists=True)
+
+    # translate if necessary
+    original_query = payload.query
+    if payload.lang != "en":
+        payload.query = translate(
+            from_lang=payload.lang, to_lang="en", text=payload.query
+        )
+
+    tags = [f"sheet:{payload.googleSheetId}", "channel:search", f"lang:{payload.lang}"]
+    with observe("search", project="search", input=payload.query, tags=tags) as span:
+        docs_and_scores = vector_store.similarity_search_with_score(
+            query=payload.query, k=payload.k
+        )
+        results = _build_results(docs_and_scores, vector_store)
+        if span is not None:
+            _record_search(span, payload, original_query, docs_and_scores, results)
 
     # translate results if necessary
     if payload.lang != "en":
@@ -188,6 +229,18 @@ async def search(payload: SearchPayload, api_key: str = Depends(key_query_scheme
                     child[dm.ANSWER] = translate(
                         from_lang="en", to_lang=payload.lang, text=child[dm.ANSWER]
                     )
+
+    # Metadata only; the query text itself is not logged.
+    logger.info(
+        "search",
+        extra={
+            "googleSheetId": payload.googleSheetId,
+            "lang": payload.lang,
+            "k": payload.k,
+            "query_chars": len(payload.query),
+            "n_results": len(results),
+        },
+    )
 
     return ORJSONResponse(
         status_code=200,

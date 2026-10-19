@@ -1,7 +1,6 @@
 from __future__ import annotations
 import re
 import copy
-from pathlib import Path
 from typing import List
 from fastapi import HTTPException
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -24,13 +23,16 @@ from azure.search.documents.indexes.models import (
     VectorSearchAlgorithmMetric,
     VectorSearchProfile,
 )
-from utils.logger import logger
 from utils.constants import DocumentMetadata
 from utils.document_loader import DocumentLoader
-from utils.document_chunker import DocumentChunker
+import logging
 import os
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_HUGGING_FACE_MODEL = "sentence-transformers/all-mpnet-base-v2"
+
+_stores: dict[str, VectorStore] = {}
 
 
 dm = DocumentMetadata()
@@ -52,8 +54,8 @@ def googleid_to_vectorstoreid(googleid: str) -> str:
 
 class VectorStore:
     """
-    Vector storage for chunked documents and embeddings
-        1. Embeds chunked documents
+    Vector storage for documents and embeddings: one document per Q&A or offer
+        1. Embeds documents
         2. Save to vector store
     """
 
@@ -66,7 +68,7 @@ class VectorStore:
         store_password: str = None,
         embedding_source: str = None,
         embedding_model: str = None,
-        store_id: str = "chunked_document_embeddings",
+        store_id: str = "document_embeddings",
     ):
         self.store_id = store_id
         self.embedding_source = embedding_source
@@ -74,6 +76,9 @@ class VectorStore:
         self.store_service = store_service
         self.store_password = store_password
         self.store_path = store_path
+        # documents sent by the last add_documents(); unlike get_document_count(),
+        # which Azure AI Search updates only some seconds after indexing
+        self.n_documents_added = 0
         self.embedder = self._set_embedder()
         self.client = self._set_client()
         self.langchain_client = self._set_langchain_client()
@@ -194,14 +199,14 @@ class VectorStore:
                 detail=f"Vector store {self.store_service} not available. Only 'azuresearch' are currently available.",
             )
 
-    def add_documents(self, chunked_documents: List[Document]) -> int:
+    def add_documents(self, documents_to_add: List[Document]) -> int:
         """
-        Add new incoming chunked documents to the vector store
+        Add new incoming documents (one per Q&A or offer, keyed by google_index) to the vector store
         If the collection/index specified by store_id is not empty, replace all content
         Add metadata regarding the embedding model
         """
         n_docs_added = 0
-        if len(chunked_documents) > 0:
+        if len(documents_to_add) > 0:
             n_docs_in_collection = 0
             if self.store_service.lower() == "azuresearch":
                 n_docs_in_collection = self.client.get_document_count()
@@ -217,21 +222,20 @@ class VectorStore:
                     index_client.delete_index(self.store_id)
                     self._create_azuresearch_index()
 
-            n_docs_added = len(chunked_documents)
-            logger.info(f"Adding {n_docs_added} new incoming chunked documents")
+            n_docs_added = len(documents_to_add)
+            logger.info(f"Adding {n_docs_added} new incoming documents")
             documents = []
             metadatas = []
             ids = []
-            for doc in chunked_documents:
+            for doc in documents_to_add:
                 documents.append(doc.page_content)
                 metadatas.append(doc.metadata)
-                ids.append(
-                    f"{doc.metadata[dm.GOOGLE_INDEX]}_{doc.metadata[dm.NTH_CHUNK]}"
-                )
+                ids.append(doc.metadata[dm.GOOGLE_INDEX])
             metadatas = self._add_embedding_model_to_metadata(metadatas)
             self.langchain_client.add_texts(
                 texts=documents, metadatas=metadatas, ids=ids
             )
+            self.n_documents_added = n_docs_added
 
             return n_docs_added
 
@@ -277,13 +281,8 @@ def create_vector_store_index(
             detail=f"No documents found, cannot create vector store for document_id {document_id}.",
         )
 
-    document_chunker = DocumentChunker(
-        chunking_strategy="TokenizedSentenceSplitting",
-        kwargs={"chunk_overlap": 20, "chunk_size": 256},
-    )
-    docs = document_chunker.split_documents(documents=docs)
-
-    # add documents to vector store
+    # add documents to vector store: each Q&A or offer is embedded whole, as one
+    # entry, so it is retrieved with its question/name and is never fragmented
     vector_store = VectorStore(
         store_path=os.environ["VECTOR_STORE_ADDRESS"],
         store_service="azuresearch",
@@ -296,14 +295,28 @@ def create_vector_store_index(
     logger.info(
         f"Created vector store index {vector_store.store_id} with {n_docs} documents."
     )
+    _stores[vector_store.store_id] = vector_store
     return vector_store
+
+
+def invalidate_vector_store(google_sheet_id: str) -> None:
+    """Forget a cached store (call after deleting its index)."""
+    _stores.pop(googleid_to_vectorstoreid(google_sheet_id), None)
 
 
 def get_vector_store(
     google_sheet_id: str, check_if_exists: bool = False
 ) -> VectorStore:
-    """Get vector store from Azure Search."""
+    """Get vector store from Azure Search.
+
+    With `check_if_exists`, a missing/empty index is created from the Google Sheet
+    and the store is cached, so the check runs once per process, not per request.
+    """
     vector_store_id = googleid_to_vectorstoreid(google_sheet_id)
+    cached = _stores.get(vector_store_id)
+    if cached is not None:
+        return cached
+
     vector_store = VectorStore(
         store_path=os.environ["VECTOR_STORE_ADDRESS"],
         store_service="azuresearch",
@@ -312,12 +325,13 @@ def get_vector_store(
         embedding_model=os.environ["MODEL_EMBEDDINGS"],
         store_id=vector_store_id,
     )
-    # if index is not found, create it
-    if check_if_exists and vector_store.count_documents() == 0:
-        logger.info(f"Vector store {vector_store_id} not found. Creating new one.")
-        vector_store = create_vector_store_index(
-            document_type="googlesheet",
-            document_id=google_sheet_id,
-            document_data={},
-        )
+    if check_if_exists:
+        if vector_store.count_documents() == 0:
+            logger.info(f"Vector store {vector_store_id} not found. Creating new one.")
+            vector_store = create_vector_store_index(
+                document_type="googlesheet",
+                document_id=google_sheet_id,
+                document_data={},
+            )
+        _stores[vector_store_id] = vector_store
     return vector_store

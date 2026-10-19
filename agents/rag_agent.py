@@ -1,146 +1,269 @@
 from __future__ import annotations
-from dataclasses import dataclass
 from langchain_core.documents import Document
-from typing_extensions import List
-from langchain_openai import AzureChatOpenAI
+from typing_extensions import Annotated, List
+from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, MessagesState
-from langchain.messages import SystemMessage
+from langchain.messages import SystemMessage, RemoveMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.graph import END
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.postgres import PostgresSaver
-from pydantic import BaseModel, Field
+from psycopg_pool import ConnectionPool
 import os
+from urllib.parse import quote
 from utils.vector_store import get_vector_store
-from utils.groundedness import detect_groundness
+from utils.prompt_loader import get_direct_answer_prompt, get_language_prompt
+from utils.constants import DocumentMetadata as dm
 from dotenv import load_dotenv
 
 load_dotenv()
 
+_llm = None
+_rag_agent = None
+_checkpointer_pool = None
 
-@dataclass
-class ContextSchema:
-    googleSheetId: str
+# Number of recent human/AI messages passed to the LLM
+_HISTORY_WINDOW = 10
+
+# Twilio drops a webhook reply after 15 s and a turn makes up to two sequential
+# LLM calls, so each call must fail fast enough for the fallback message to be
+# delivered. Retries are off by default: the client honours Retry-After (up to
+# 60 s) and retries timeouts, either of which would exceed that budget.
+_DEFAULT_LLM_TIMEOUT_S = 6.0
+_DEFAULT_LLM_MAX_RETRIES = 0
+
+# OpenAI's recommended effort for chat assistants that use tools; "none" is
+# faster, higher efforts are too slow for the Twilio window.
+_DEFAULT_LLM_REASONING_EFFORT = "low"
+
+# Documents (one per Q&A or offer) retrieved per search (RETRIEVAL_K)
+_DEFAULT_RETRIEVAL_K = 10
 
 
-# Initialize the LLM client
-llm = AzureChatOpenAI(
-    azure_endpoint=os.environ["OPENAI_ENDPOINT"],
-    azure_deployment=os.environ["MODEL_CHAT"],
-    openai_api_version=os.environ["OPENAI_API_VERSION"],
-    temperature=0.2,
+class RagState(MessagesState):
+    """Conversation state: `messages` holds only human/AI turns; docs live apart."""
+
+    retrieved_docs: List[Document]
+    # the query the model wrote for the retrieve tool this turn ("" when no retrieval)
+    search_query: str
+
+
+def format_context(docs: List[Document]) -> str:
+    """The retrieved documents exactly as they are fed to the model, numbered in rank order."""
+    return "\n\n".join(f"[{index}] {doc.page_content}" for index, doc in enumerate(docs, start=1))
+
+
+def _azure_v1_base_url(endpoint: str) -> str:
+    """Azure OpenAI v1 API root (no api-version) for a resource endpoint."""
+    endpoint = endpoint.rstrip("/")
+    if not endpoint.endswith("/openai/v1"):
+        endpoint = f"{endpoint}/openai/v1"
+    return f"{endpoint}/"
+
+
+def _get_llm():
+    """Lazily initialize the LLM client.
+
+    Azure OpenAI v1 API through the plain OpenAI client, on the Responses API:
+    GPT-6 reasoning models only call tools with reasoning there (Chat Completions
+    allows tools only with reasoning effort "none"). No temperature: reasoning
+    models reject sampling parameters. store=False keeps conversations from being
+    stored by the Responses API.
+    """
+    global _llm
+    if _llm is None:
+        _llm = ChatOpenAI(
+            base_url=_azure_v1_base_url(os.environ["OPENAI_ENDPOINT"]),
+            api_key=os.environ["OPENAI_API_KEY"],
+            model=os.environ["MODEL_CHAT"],
+            use_responses_api=True,
+            reasoning_effort=os.environ.get("LLM_REASONING_EFFORT", _DEFAULT_LLM_REASONING_EFFORT),
+            store=False,
+            timeout=float(os.environ.get("LLM_TIMEOUT_S", _DEFAULT_LLM_TIMEOUT_S)),
+            max_retries=int(os.environ.get("LLM_MAX_RETRIES", _DEFAULT_LLM_MAX_RETRIES)),
+        )
+    return _llm
+
+
+def _system_prompt(config: RunnableConfig) -> str:
+    return config["configurable"]["system_prompt"]
+
+
+def _llm_config(config: RunnableConfig) -> RunnableConfig:
+    """Tracing callbacks for the LLM calls only.
+
+    Passing callbacks to the graph run would also record every node, edge and
+    tool wrapper; only the two model calls are worth an observation.
+    """
+    return {"callbacks": config["configurable"].get("llm_callbacks") or []}
+
+
+def _conversation(state: RagState) -> list:
+    """Recent human/AI turns, excluding tool-call scaffolding."""
+    return [
+        message
+        for message in state["messages"]
+        if message.type == "human" or (message.type == "ai" and not message.tool_calls)
+    ][-_HISTORY_WINDOW:]
+
+
+_RETRIEVE_DESCRIPTION = (
+    "Search the HIA documents for information to answer the user's latest message. "
+    "Call this for every question about information, services or help, including "
+    "short follow-ups that refer back to earlier turns. When in doubt, call it."
 )
 
 
-class RetrieveInput(BaseModel):
-    """Input schema for retrieval tool."""
-
-    query: str = Field(description="The search query to retrieve relevant documents.")
-    googleSheetId: str = Field(description="The ID of the Google Sheet to search.")
-
-
-# Retrieval tool
-@tool(response_format="content_and_artifact", args_schema=RetrieveInput)
-def retrieve(query: str, googleSheetId: str) -> tuple[str, List[Document]]:
-    """Retrieve information related to a query."""
-    vector_store = get_vector_store(googleSheetId)
-    retrieved_docs = vector_store.similarity_search(query, k=5)
-    serialized = "\n\n".join(f"Document: {doc.page_content}" for doc in retrieved_docs)
-    return serialized, retrieved_docs
+# Retrieval tool. googleSheetId comes from the run config, not from the LLM,
+# so the model cannot hallucinate a sheet id.
+@tool(response_format="content_and_artifact", description=_RETRIEVE_DESCRIPTION)
+def retrieve(
+    query: Annotated[
+        str,
+        "A standalone search query in English that can be understood without the "
+        "conversation history. Resolve references and pronouns in the user's latest "
+        "message (e.g. 'are you sure?', 'and then?', 'what about children?') into an "
+        "explicit question using the earlier turns. If the latest message is already "
+        "self-contained, use it unchanged. Do not answer the question.",
+    ],
+    config: RunnableConfig,
+) -> tuple[str, List[Document]]:
+    """Retrieve documents for a query; the LLM-facing description is _RETRIEVE_DESCRIPTION."""
+    google_sheet_id = config["configurable"]["googleSheetId"]
+    vector_store = get_vector_store(google_sheet_id)
+    k = int(os.environ.get("RETRIEVAL_K", _DEFAULT_RETRIEVAL_K))
+    retrieved_docs = []
+    for doc, score in vector_store.similarity_search_with_score(query, k=k):
+        doc.metadata[dm.SCORE] = score
+        retrieved_docs.append(doc)
+    return format_context(retrieved_docs), retrieved_docs
 
 
 # Define retrieve-or-respond node
-def query_or_respond(state: MessagesState) -> dict:
+def query_or_respond(state: RagState, config: RunnableConfig) -> dict:
     """Generate tool call for retrieval or respond."""
-    llm_with_tools = llm.bind_tools([retrieve])
-    # prompt = [SystemMessage(f"{rag_agent_prompt}")] + state["messages"]
-    # response = llm_with_tools.invoke(prompt)
+    llm_with_tools = _get_llm().bind_tools([retrieve])
+    # This call answers directly when it skips retrieval, so it also gets the
+    # direct-answer rules; generate() must not, as it answers from documents.
+    system_prompt = "\n\n".join(
+        [_system_prompt(config).rstrip(), get_direct_answer_prompt(), get_language_prompt()]
+    )
+    prompt = [SystemMessage(system_prompt)] + _conversation(state)
+    response = llm_with_tools.invoke(prompt, config=_llm_config(config))
 
-    # Get most recent message of type system to use as system prompt
-    system_prompt = [
-        message.content
-        for message in reversed(state["messages"])
-        if message.type == "system"
-    ][0]
-
-    # Pass also recent conversation messages
-    conversation_messages = [
-        message
-        for message in state["messages"]
-        if message.type == "human" or (message.type == "ai" and not message.tool_calls)
-    ][-10:]
-
-    prompt = [SystemMessage(system_prompt)] + conversation_messages
-
-    response = llm_with_tools.invoke(prompt)
-
-    # MessagesState appends messages to state instead of overwriting
-    return {"messages": [response]}
+    # MessagesState appends messages to state instead of overwriting;
+    # retrieved_docs/search_query are reset so a direct answer never reports stale context.
+    return {"messages": [response], "retrieved_docs": [], "search_query": ""}
 
 
 # Generate a response using the retrieved content.
-def generate(state: MessagesState):
+def generate(state: RagState, config: RunnableConfig):
     """Generate answer."""
 
-    # Get all docs recently retrieved
-    recent_tool_messages = []
+    # Collect this turn's tool-call scaffolding (AI tool call + tool results)
+    scaffolding = []
     for message in reversed(state["messages"]):
-        if message.type == "tool":
-            recent_tool_messages.append(message)
-        else:
+        scaffolding.append(message)
+        if message.type == "ai" and message.tool_calls:
             break
-    tool_messages = recent_tool_messages[::-1]
-    docs = [doc.content for doc in tool_messages]
-    docs_content = "\n\n".join(docs)
+    scaffolding.reverse()
 
-    # Get most recent message of type system to use as system prompt
-    system_prompt = [
-        message.content
-        for message in reversed(state["messages"])
-        if message.type == "system"
-    ][0]
+    docs: List[Document] = []
+    search_query = ""
+    for message in scaffolding:
+        if message.type == "tool":
+            docs.extend(message.artifact or [])
+        elif message.type == "ai" and message.tool_calls:
+            search_query = str(message.tool_calls[0]["args"].get("query", ""))
 
-    # Merge system prompt with retrieved docs
-    system_prompt = f"{system_prompt}.\n\n{docs_content}"
+    # "(none)" makes an empty search explicit, so the prompt's "no documents"
+    # rule applies instead of the model answering from memory. The language
+    # rules come last: English documents otherwise pull the reply into English.
+    context = format_context(docs) or "(none)"
+    system_prompt = "\n\n".join(
+        [
+            _system_prompt(config).rstrip(),
+            f"Context documents:\n{context}",
+            get_language_prompt(),
+        ]
+    )
+    prompt = [SystemMessage(system_prompt)] + _conversation(state)
 
-    # Pass also recent conversation messages
-    conversation_messages = [
-        message
-        for message in state["messages"]
-        if message.type == "human" or (message.type == "ai" and not message.tool_calls)
-    ][-10:]
-    prompt = [SystemMessage(system_prompt)] + conversation_messages
+    response = _get_llm().invoke(prompt, config=_llm_config(config))
 
-    # Run
-    response = llm.invoke(prompt)
-
-    # # Check groundedness
-    # user_query = conversation_messages[-1].content
-    # response.content = detect_groundness(
-    #     content_text=response.content, grounding_sources=docs, query=user_query
-    # )
-
-    return {"messages": [response]}
+    # Drop the scaffolding from persisted history: docs are kept in retrieved_docs
+    # for this turn only, so the checkpoint does not grow by 20 documents per turn.
+    removals = [RemoveMessage(id=message.id) for message in scaffolding]
+    return {
+        "messages": removals + [response],
+        "retrieved_docs": docs,
+        "search_query": search_query,
+    }
 
 
-# Define and build the agent graph
-DB_URI = f'postgresql://{os.environ["CHECKPOINT_DB_USER"]}:{os.environ["CHECKPOINT_DB_PASSWORD"]}@{os.environ["CHECKPOINT_DB_HOST"]}'
-_checkpointer_context = PostgresSaver.from_conn_string(DB_URI)
-checkpointer = _checkpointer_context.__enter__()
+def init_rag_agent():
+    """Open the checkpoint pool and compile the graph."""
+    global _rag_agent, _checkpointer_pool
+    if _rag_agent is not None:
+        return _rag_agent
 
-tools = ToolNode([retrieve])
-graph_builder = StateGraph(MessagesState)
-graph_builder.add_node(query_or_respond)
-graph_builder.add_node(tools)
-graph_builder.add_node(generate)
+    db_user = quote(os.environ["CHECKPOINT_DB_USER"], safe="")
+    db_password = quote(os.environ["CHECKPOINT_DB_PASSWORD"], safe="")
+    db_host = os.environ["CHECKPOINT_DB_HOST"]
+    separator = "&" if "?" in db_host else "?"
+    db_uri = f"postgresql://{db_user}:{db_password}@{db_host}{separator}sslmode=require"
 
-graph_builder.set_entry_point("query_or_respond")
-graph_builder.add_conditional_edges(
-    "query_or_respond",
-    tools_condition,
-    {END: END, "tools": "tools"},
-)
-graph_builder.add_edge("tools", "generate")
-graph_builder.add_edge("generate", END)
+    # Use a connection pool that validates connections on checkout so that
+    # stale/closed connections (idle timeouts, DB restarts, network blips)
+    # are transparently recreated instead of raising "the connection is closed".
+    _checkpointer_pool = ConnectionPool(
+        conninfo=db_uri,
+        max_size=20,
+        open=True,
+        check=ConnectionPool.check_connection,
+        kwargs={"autocommit": True, "prepare_threshold": 0},
+    )
 
-rag_agent = graph_builder.compile(checkpointer=checkpointer)
+    checkpointer = PostgresSaver(_checkpointer_pool)
+    checkpointer.setup()
+    _rag_agent = build_graph(checkpointer)
+    return _rag_agent
+
+
+def close_rag_agent():
+    """Close the checkpoint pool (app shutdown)."""
+    global _rag_agent, _checkpointer_pool
+    if _checkpointer_pool is not None:
+        _checkpointer_pool.close()
+    _checkpointer_pool = None
+    _rag_agent = None
+
+
+def build_graph(checkpointer):
+    """Compile the RAG graph on top of the given checkpointer."""
+    tools = ToolNode([retrieve])
+    graph_builder = StateGraph(RagState)
+    graph_builder.add_node(query_or_respond)
+    graph_builder.add_node(tools)
+    graph_builder.add_node(generate)
+
+    graph_builder.set_entry_point("query_or_respond")
+    graph_builder.add_conditional_edges(
+        "query_or_respond",
+        tools_condition,
+        {END: END, "tools": "tools"},
+    )
+    graph_builder.add_edge("tools", "generate")
+    graph_builder.add_edge("generate", END)
+
+    return graph_builder.compile(checkpointer=checkpointer)
+
+
+def get_rag_agent():
+    """Return the agent built by init_rag_agent()."""
+    if _rag_agent is None:
+        raise RuntimeError(
+            "RAG agent not initialized; init_rag_agent() must run at startup"
+        )
+    return _rag_agent

@@ -1,23 +1,25 @@
 from __future__ import annotations
 from fastapi import (
-    Depends,
     APIRouter,
+    Depends,
     HTTPException,
 )
 from fastapi.responses import JSONResponse
-from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from azure.search.documents.indexes import SearchIndexClient
 from azure.core.credentials import AzureKeyCredential
-from utils.vector_store import create_vector_store_index, googleid_to_vectorstoreid
+from utils.auth import require_write_key
+from utils.vector_store import (
+    create_vector_store_index,
+    googleid_to_vectorstoreid,
+    invalidate_vector_store,
+)
 from utils.constants import DocumentMetadata
 import os
 
 dm = DocumentMetadata()
 
 router = APIRouter()
-
-key_query_scheme = APIKeyHeader(name="Authorization")
 
 
 class VectorStorePayload(BaseModel):
@@ -31,14 +33,16 @@ class VectorStorePayload(BaseModel):
     )
 
 
-@router.post("/create-vector-store", tags=["data"])
-async def create_vector_store(
-    payload: VectorStorePayload, api_key: str = Depends(key_query_scheme)
-):
-    """Create a vector store from a HIA instance. Replace all entries if it already exists."""
+# Plain `def`, not `async def`: rebuilding an index loads the sheet, translates
+# and embeds every entry (minutes of blocking I/O). In the threadpool that keeps
+# the event loop free for chat/Twilio requests and gunicorn's worker heartbeat.
+@router.post(
+    "/create-vector-store", tags=["data"], dependencies=[Depends(require_write_key)]
+)
+def create_vector_store(payload: VectorStorePayload):
+    """Create a vector store from a HIA instance. Replace all entries if it already exists.
 
-    if api_key != os.environ["API_KEY_WRITE"]:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    Protected with `API_KEY_WRITE`."""
 
     if payload.data:
         document_type = "json"
@@ -51,21 +55,20 @@ async def create_vector_store(
         document_data=payload.data,
     )
 
+    # count what was uploaded: the index's own document count lags a few
+    # seconds behind indexing and reads 0 right after the index is recreated
     return JSONResponse(
         status_code=200,
         content=f"Created vector store index {googleid_to_vectorstoreid(payload.googleSheetId)} "
-        f"with {vector_store.client.get_document_count()} documents.",
+        f"with {vector_store.n_documents_added} documents.",
     )
 
 
-@router.delete("/delete-vector-store", tags=["data"])
-async def delete_vector_store(
-    payload: VectorStorePayload, api_key: str = Depends(key_query_scheme)
-):
-    """Delete a vector store."""
-
-    if api_key != os.environ["API_KEY_WRITE"]:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+@router.delete(
+    "/delete-vector-store", tags=["data"], dependencies=[Depends(require_write_key)]
+)
+def delete_vector_store(payload: VectorStorePayload):
+    """Delete a vector store. Protected with `API_KEY_WRITE`."""
 
     vector_store_id = googleid_to_vectorstoreid(payload.googleSheetId)
     azure_search_index_client = SearchIndexClient(
@@ -77,6 +80,7 @@ async def delete_vector_store(
         _ = azure_search_index_client.delete_index(vector_store_id)
     except Exception as ex:
         raise HTTPException(status_code=400, detail=str(ex))
+    invalidate_vector_store(payload.googleSheetId)
 
     return JSONResponse(
         status_code=200, content=f"Deleted vector store index {vector_store_id}."
