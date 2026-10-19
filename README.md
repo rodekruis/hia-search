@@ -89,7 +89,7 @@ See [`example.env`](./example.env) for all required environment variables.
 
 #### Support contacts
 
-Some people who write to the chatbot are upset, frightened or at risk. [Wellbeing rules](config/wellbeing_prompt.txt), inspired by [Psychological First Aid (PFA)](https://mhpsshub.org/resource/a-guide-to-psychological-first-aid-for-red-cross-red-crescent-societies/), are appended to every prompt (also when the `Chat` sheet has its own prompt). The chatbot acknowledges distress, puts safety first and gives the right support contact. These contacts are set per instance in the `Chat` sheet, one row each, with the key under `#KEY` and one contact (preferably a phone number) under `#VALUE`:
+People who write to the chatbot can be upset, frightened or at risk. [Wellbeing rules](config/wellbeing_prompt.txt), inspired by [Psychological First Aid (PFA)](https://mhpsshub.org/resource/a-guide-to-psychological-first-aid-for-red-cross-red-crescent-societies/), are appended to every prompt (also when the `Chat` sheet has its own prompt): the chatbot is instructed to acknowledge distress, put safety first and give the right support contact. These contacts are set per instance in the `Chat` sheet, one row each, with the key under `#KEY` and one contact (preferably a phone number) under `#VALUE`:
 
 | `#KEY` | Contact for |
 |---|---|
