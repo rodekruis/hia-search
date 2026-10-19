@@ -156,6 +156,8 @@ class DocumentLoader:
                 "text",
             ]
         ]
+        # filter out offers without a name (e.g. placeholder rows with only IDs)
+        df = df[df[dm.NAME].notna() & (df[dm.NAME].astype(str).str.strip() != "")]
         if df.empty:
             return df.assign(source="Offers")
 

@@ -168,6 +168,14 @@ class TestCleanOffersSheet:
         ]:
             assert fragment in text
 
+    @pytest.mark.parametrize("name", [float("nan"), "", "  "])
+    def test_drops_offers_without_name(self, name):
+        df = self.loader._clean_Offers_sheet(
+            _offers_sheet([{"#NAME": name}, {"#NAME": "kept"}])
+        )
+        assert df["name"].tolist() == ["kept"]
+        assert df.iloc[0]["google_index"] == "Offers1"
+
     def test_sheet_without_offers_returns_empty_frame(self):
         """Q&A-only instances (e.g. FAU) have an Offers tab with headers but no rows."""
         df = self.loader._clean_Offers_sheet(_offers_sheet([{"#CATEGORY": None}]))
