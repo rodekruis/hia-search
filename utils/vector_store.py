@@ -76,6 +76,9 @@ class VectorStore:
         self.store_service = store_service
         self.store_password = store_password
         self.store_path = store_path
+        # documents sent by the last add_documents(); unlike get_document_count(),
+        # which Azure AI Search updates only some seconds after indexing
+        self.n_documents_added = 0
         self.embedder = self._set_embedder()
         self.client = self._set_client()
         self.langchain_client = self._set_langchain_client()
@@ -232,6 +235,7 @@ class VectorStore:
             self.langchain_client.add_texts(
                 texts=documents, metadatas=metadatas, ids=ids
             )
+            self.n_documents_added = n_docs_added
 
             return n_docs_added
 

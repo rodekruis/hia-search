@@ -12,7 +12,9 @@ class TestCreateVectorStore:
     @patch("routes.data.create_vector_store_index")
     def test_create_from_google_sheet(self, mock_create, client):
         mock_vs = MagicMock()
-        mock_vs.client.get_document_count.return_value = 42
+        mock_vs.n_documents_added = 326
+        # Azure AI Search's count lags behind indexing: right after a rebuild it reads 0
+        mock_vs.client.get_document_count.return_value = 0
         mock_create.return_value = mock_vs
 
         resp = client.post(
@@ -23,6 +25,7 @@ class TestCreateVectorStore:
         )
 
         assert resp.status_code == 200
+        assert resp.json() == "Created vector store index sheet123 with 326 documents."
         mock_create.assert_called_once_with(
             document_type="googlesheet",
             document_id="sheet123",
@@ -32,7 +35,7 @@ class TestCreateVectorStore:
     @patch("routes.data.create_vector_store_index")
     def test_create_from_json_with_auth(self, mock_create, client):
         mock_vs = MagicMock()
-        mock_vs.client.get_document_count.return_value = 10
+        mock_vs.n_documents_added = 10
         mock_create.return_value = mock_vs
 
         resp = client.post(

@@ -95,6 +95,7 @@ class TestAddDocuments:
         n = store.add_documents(entries)
 
         assert n == 3
+        assert store.n_documents_added == 3
         kwargs = store.langchain_client.add_texts.call_args.kwargs
         assert kwargs["texts"] == ["a", "b", "c"]
         # one entry per Q&A/offer: the google_index is the document key

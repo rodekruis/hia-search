@@ -56,10 +56,12 @@ async def create_vector_store(
         document_data=payload.data,
     )
 
+    # count what was uploaded: the index's own document count lags a few
+    # seconds behind indexing and reads 0 right after the index is recreated
     return JSONResponse(
         status_code=200,
         content=f"Created vector store index {googleid_to_vectorstoreid(payload.googleSheetId)} "
-        f"with {vector_store.client.get_document_count()} documents.",
+        f"with {vector_store.n_documents_added} documents.",
     )
 
 
