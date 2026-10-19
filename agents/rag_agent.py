@@ -74,14 +74,28 @@ def _conversation(state: RagState) -> list:
     ][-_HISTORY_WINDOW:]
 
 
+_RETRIEVE_DESCRIPTION = (
+    "Search the HIA documents for information to answer the user's latest message. "
+    "Call this for every question about information, services or help, including "
+    "short follow-ups that refer back to earlier turns. When in doubt, call it."
+)
+
+
 # Retrieval tool. googleSheetId comes from the run config, not from the LLM,
 # so the model cannot hallucinate a sheet id.
-@tool(response_format="content_and_artifact")
+@tool(response_format="content_and_artifact", description=_RETRIEVE_DESCRIPTION)
 def retrieve(
-    query: Annotated[str, "The search query to retrieve relevant documents."],
+    query: Annotated[
+        str,
+        "A standalone search query in English that can be understood without the "
+        "conversation history. Resolve references and pronouns in the user's latest "
+        "message (e.g. 'are you sure?', 'and then?', 'what about children?') into an "
+        "explicit question using the earlier turns. If the latest message is already "
+        "self-contained, use it unchanged. Do not answer the question.",
+    ],
     config: RunnableConfig,
 ) -> tuple[str, List[Document]]:
-    """Retrieve information related to a query."""
+    """Retrieve documents for a query; the LLM-facing description is _RETRIEVE_DESCRIPTION."""
     google_sheet_id = config["configurable"]["googleSheetId"]
     vector_store = get_vector_store(google_sheet_id)
     retrieved_docs = vector_store.similarity_search(query, k=10)

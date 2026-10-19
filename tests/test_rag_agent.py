@@ -213,6 +213,12 @@ def test_retrieve_tool_schema_hides_sheet_id():
     assert set(rag_agent.retrieve.args) == {"query"}
 
 
+def test_retrieve_tool_asks_for_standalone_query_and_biases_towards_search():
+    """Routing and query rewriting happen in one LLM call, steered by the tool schema."""
+    assert "standalone" in rag_agent.retrieve.args["query"]["description"]
+    assert "When in doubt, call it." in rag_agent.retrieve.description
+
+
 class TestAgentLifecycle:
     """Postgres wiring: URL-encoded creds, sslmode, pool health checks, init/close."""
 

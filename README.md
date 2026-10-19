@@ -62,7 +62,7 @@ sequenceDiagram
 
 1. User sends a query via the `/search`, `/chat-dummy`, or `/chat-twilio-webhook` endpoint.
 2. The query is translated to English (if needed) using Microsoft Cognitive Services.
-3. Relevant Q&A documents are retrieved from Azure AI Search.
+3. Relevant Q&A documents are retrieved from Azure AI Search. For chat endpoints, the LLM first decides whether the message needs a search (greetings and small talk don't; when in doubt it searches) and, in the same call, rewrites follow-ups such as "are you sure?" into a standalone search query using the conversation history.
 4. For chat endpoints, a LangGraph RAG agent passes the documents + conversation history to Azure OpenAI to generate a response.
 5. The response is translated back to the user's language.
 
