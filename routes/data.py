@@ -1,14 +1,14 @@
 from __future__ import annotations
 from fastapi import (
     APIRouter,
+    Depends,
     HTTPException,
-    Request
 )
 from fastapi.responses import JSONResponse
-from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from azure.search.documents.indexes import SearchIndexClient
 from azure.core.credentials import AzureKeyCredential
+from utils.auth import require_write_key
 from utils.vector_store import (
     create_vector_store_index,
     googleid_to_vectorstoreid,
@@ -20,8 +20,6 @@ import os
 dm = DocumentMetadata()
 
 router = APIRouter()
-
-key_query_scheme = APIKeyHeader(name="Authorization")
 
 
 class VectorStorePayload(BaseModel):
@@ -35,20 +33,21 @@ class VectorStorePayload(BaseModel):
     )
 
 
-@router.post("/create-vector-store", tags=["data"])
-async def create_vector_store(
-    payload: VectorStorePayload, request: Request
-):
-    """Create a vector store from a HIA instance. Replace all entries if it already exists."""
+# Plain `def`, not `async def`: rebuilding an index loads the sheet, translates
+# and embeds every entry (minutes of blocking I/O). In the threadpool that keeps
+# the event loop free for chat/Twilio requests and gunicorn's worker heartbeat.
+@router.post(
+    "/create-vector-store", tags=["data"], dependencies=[Depends(require_write_key)]
+)
+def create_vector_store(payload: VectorStorePayload):
+    """Create a vector store from a HIA instance. Replace all entries if it already exists.
+
+    Protected with `API_KEY_WRITE`."""
 
     if payload.data:
         document_type = "json"
     else:
         document_type = "googlesheet"
-
-    if document_type == "json":
-        if "Authorization" not in request.headers or request.headers["Authorization"] != os.environ["API_KEY_WRITE"]:
-            raise HTTPException(status_code=401, detail="Unauthorized")
 
     vector_store = create_vector_store_index(
         document_type=document_type,
@@ -65,11 +64,11 @@ async def create_vector_store(
     )
 
 
-@router.delete("/delete-vector-store", tags=["data"])
-async def delete_vector_store(
-    payload: VectorStorePayload
-):
-    """Delete a vector store."""
+@router.delete(
+    "/delete-vector-store", tags=["data"], dependencies=[Depends(require_write_key)]
+)
+def delete_vector_store(payload: VectorStorePayload):
+    """Delete a vector store. Protected with `API_KEY_WRITE`."""
 
     vector_store_id = googleid_to_vectorstoreid(payload.googleSheetId)
     azure_search_index_client = SearchIndexClient(

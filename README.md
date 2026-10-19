@@ -146,7 +146,7 @@ If not here, see the [`/docs`](https://hia-search.azurewebsites.net/docs).
 
 ### `/create-vector-store`
 
-The `/create-vector-store` endpoint accepts a `googleSheetId` body parameter, fetches all data from the Q&A sheet, and creates an [index](https://learn.microsoft.com/en-us/azure/search/search-what-is-an-index) in Azure AI Search, Azure's native vector database. If the index already exists, its content will be updated.
+The `/create-vector-store` endpoint accepts a `googleSheetId` body parameter, fetches all data from the Q&A sheet, and creates an [index](https://learn.microsoft.com/en-us/azure/search/search-what-is-an-index) in Azure AI Search, Azure's native vector database. If the index already exists, its content will be updated. The rebuild runs within the request and can take a few minutes for large sheets (every entry is translated and embedded); it does not hold up chat or search requests meanwhile. The response reports the number of documents indexed.
 
 If the Q&A sheet is not publicly accessible, you can pass its content under the `data` body parameter. The content must be a valid JSON object structured as the [test-data from the `helpful-information`-app](https://github.com/rodekruis/helpful-information/blob/main/data/test-sheet-id-1/values/Q%26As.json).
 
