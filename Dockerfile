@@ -24,7 +24,6 @@ WORKDIR /app
 
 # install required packages
 RUN uv sync --frozen --no-dev
-RUN uv run python -m spacy download en_core_web_sm
 
 # expose the port that the server will run the app on
 ENV PORT=8000

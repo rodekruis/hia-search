@@ -25,7 +25,6 @@ from azure.search.documents.indexes.models import (
 )
 from utils.constants import DocumentMetadata
 from utils.document_loader import DocumentLoader
-from utils.document_chunker import DocumentChunker
 import logging
 import os
 
@@ -55,8 +54,8 @@ def googleid_to_vectorstoreid(googleid: str) -> str:
 
 class VectorStore:
     """
-    Vector storage for chunked documents and embeddings
-        1. Embeds chunked documents
+    Vector storage for documents and embeddings: one document per Q&A or offer
+        1. Embeds documents
         2. Save to vector store
     """
 
@@ -69,7 +68,7 @@ class VectorStore:
         store_password: str = None,
         embedding_source: str = None,
         embedding_model: str = None,
-        store_id: str = "chunked_document_embeddings",
+        store_id: str = "document_embeddings",
     ):
         self.store_id = store_id
         self.embedding_source = embedding_source
@@ -197,14 +196,14 @@ class VectorStore:
                 detail=f"Vector store {self.store_service} not available. Only 'azuresearch' are currently available.",
             )
 
-    def add_documents(self, chunked_documents: List[Document]) -> int:
+    def add_documents(self, documents_to_add: List[Document]) -> int:
         """
-        Add new incoming chunked documents to the vector store
+        Add new incoming documents (one per Q&A or offer, keyed by google_index) to the vector store
         If the collection/index specified by store_id is not empty, replace all content
         Add metadata regarding the embedding model
         """
         n_docs_added = 0
-        if len(chunked_documents) > 0:
+        if len(documents_to_add) > 0:
             n_docs_in_collection = 0
             if self.store_service.lower() == "azuresearch":
                 n_docs_in_collection = self.client.get_document_count()
@@ -220,17 +219,15 @@ class VectorStore:
                     index_client.delete_index(self.store_id)
                     self._create_azuresearch_index()
 
-            n_docs_added = len(chunked_documents)
-            logger.info(f"Adding {n_docs_added} new incoming chunked documents")
+            n_docs_added = len(documents_to_add)
+            logger.info(f"Adding {n_docs_added} new incoming documents")
             documents = []
             metadatas = []
             ids = []
-            for doc in chunked_documents:
+            for doc in documents_to_add:
                 documents.append(doc.page_content)
                 metadatas.append(doc.metadata)
-                ids.append(
-                    f"{doc.metadata[dm.GOOGLE_INDEX]}_{doc.metadata[dm.NTH_CHUNK]}"
-                )
+                ids.append(doc.metadata[dm.GOOGLE_INDEX])
             metadatas = self._add_embedding_model_to_metadata(metadatas)
             self.langchain_client.add_texts(
                 texts=documents, metadatas=metadatas, ids=ids
@@ -280,13 +277,8 @@ def create_vector_store_index(
             detail=f"No documents found, cannot create vector store for document_id {document_id}.",
         )
 
-    document_chunker = DocumentChunker(
-        chunking_strategy="TokenizedSentenceSplitting",
-        kwargs={"chunk_overlap": 20, "chunk_size": 256},
-    )
-    docs = document_chunker.split_documents(documents=docs)
-
-    # add documents to vector store
+    # add documents to vector store: each Q&A or offer is embedded whole, as one
+    # entry, so it is retrieved with its question/name and is never fragmented
     vector_store = VectorStore(
         store_path=os.environ["VECTOR_STORE_ADDRESS"],
         store_service="azuresearch",

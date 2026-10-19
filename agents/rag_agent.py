@@ -33,8 +33,7 @@ _HISTORY_WINDOW = 10
 _DEFAULT_LLM_TIMEOUT_S = 6.0
 _DEFAULT_LLM_MAX_RETRIES = 0
 
-# Chunks fetched per search (RETRIEVAL_K); chunks of the same Q&A/offer are
-# then merged, so the model sees at most this many documents.
+# Documents (one per Q&A or offer) retrieved per search (RETRIEVAL_K)
 _DEFAULT_RETRIEVAL_K = 10
 
 
@@ -49,34 +48,6 @@ class RagState(MessagesState):
 def format_context(docs: List[Document]) -> str:
     """The retrieved documents exactly as they are fed to the model."""
     return "\n\n".join(f"Document: {doc.page_content}" for doc in docs)
-
-
-def merge_chunks(docs_and_scores: List[tuple[Document, float]]) -> List[Document]:
-    """One document per `google_index`, ranked by its best-scoring chunk.
-
-    The index splits long Q&As/offers into chunks; the retrieved chunks of one
-    source are joined in their original order, so an answer takes one slot and
-    reads as a whole instead of as scattered fragments. The best chunk score is
-    kept in `metadata["score"]`.
-    """
-    groups: dict[str, list[tuple[Document, float]]] = {}
-    for position, (doc, score) in enumerate(docs_and_scores):
-        key = doc.metadata.get(dm.GOOGLE_INDEX) or f"unkeyed-{position}"
-        groups.setdefault(key, []).append((doc, score))
-
-    merged = []
-    for chunks in groups.values():
-        chunks.sort(key=lambda chunk: chunk[0].metadata.get(dm.NTH_CHUNK, 0))
-        metadata = {
-            key: value
-            for key, value in chunks[0][0].metadata.items()
-            if key != dm.NTH_CHUNK
-        }
-        metadata[dm.SCORE] = max(score for _doc, score in chunks)
-        page_content = " ".join(doc.page_content for doc, _score in chunks)
-        merged.append(Document(page_content=page_content, metadata=metadata))
-    merged.sort(key=lambda doc: doc.metadata[dm.SCORE], reverse=True)
-    return merged
 
 
 def _get_llm():
@@ -141,7 +112,10 @@ def retrieve(
     google_sheet_id = config["configurable"]["googleSheetId"]
     vector_store = get_vector_store(google_sheet_id)
     k = int(os.environ.get("RETRIEVAL_K", _DEFAULT_RETRIEVAL_K))
-    retrieved_docs = merge_chunks(vector_store.similarity_search_with_score(query, k=k))
+    retrieved_docs = []
+    for doc, score in vector_store.similarity_search_with_score(query, k=k):
+        doc.metadata[dm.SCORE] = score
+        retrieved_docs.append(doc)
     return format_context(retrieved_docs), retrieved_docs
 
 

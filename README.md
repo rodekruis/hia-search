@@ -62,7 +62,7 @@ sequenceDiagram
 
 1. User sends a query via the `/search`, `/chat-dummy`, or `/chat-twilio-webhook` endpoint.
 2. The query is translated to English (if needed) using Microsoft Cognitive Services.
-3. Relevant Q&A documents are retrieved from Azure AI Search. For chat endpoints, the LLM first decides whether the message needs a search (greetings and small talk don't; when in doubt it searches) and, in the same call, rewrites follow-ups such as "are you sure?" into a standalone search query using the conversation history. The index stores long Q&As and offers as several chunks: chat fetches `RETRIEVAL_K` chunks (default 10) and merges those of the same Q&A/offer into one document, ranked by its best score, so the model sees each source once.
+3. Relevant Q&A documents are retrieved from Azure AI Search. For chat endpoints, the LLM first decides whether the message needs a search (greetings and small talk don't; when in doubt it searches) and, in the same call, rewrites follow-ups such as "are you sure?" into a standalone search query using the conversation history. The index holds one document per Q&A or offer (never split into chunks), so search and chat retrieve whole entries; chat retrieves `RETRIEVAL_K` of them (default 10).
 4. For chat endpoints, a LangGraph RAG agent passes the documents + conversation history to Azure OpenAI to generate a response.
 5. The response is translated back to the user's language.
 
@@ -217,6 +217,9 @@ The `/delete-vector-store` endpoint accepts a `googleSheetId` body parameter and
 
 🔐 This endpoint is protected with the `API_KEY_WRITE` environment variable.
 
+>[!IMPORTANT]
+>Each Q&A or offer is indexed as one document (one `google_index`). Indexes created before this (when long entries were split into chunks) must be rebuilt once: call `/create-vector-store` for each `googleSheetId`, which replaces the index content, or delete it with `/delete-vector-store` so it is recreated on the next request.
+
 ### Errors
 
 Every response carries an `x-request-id` header. Unexpected failures return a structured body you can quote when reporting a problem:
@@ -298,7 +301,6 @@ Edit the provided [ENV-variables](./example.env) accordingly.
 ```sh
 pip install uv
 uv sync
-uv run python -m spacy download en_core_web_sm
 uv run uvicorn main:app --reload
 ```
 

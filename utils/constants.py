@@ -24,7 +24,6 @@ class DocumentMetadata:
     MOREINFO = "moreinfo"
     # splitting and embedding fields
     EMBEDDING_MODEL = "embedding_model"
-    NTH_CHUNK = "nth_chunk"
     # search result fields
     SCORE = "score"
     CHILDREN = "children"

@@ -49,8 +49,8 @@ def _store(**overrides) -> VectorStore:
     return VectorStore(**params)
 
 
-def _chunk(google_index: str, nth: int, text: str = "t") -> Document:
-    return Document(page_content=text, metadata={"google_index": google_index, "nth_chunk": nth})
+def _entry(google_index: str, text: str = "t") -> Document:
+    return Document(page_content=text, metadata={"google_index": google_index})
 
 
 class TestConstruction:
@@ -90,24 +90,25 @@ class TestAddDocuments:
     def test_adds_texts_with_ids_and_embedding_model_metadata(self, azure):
         store = _store()
         store.client.get_document_count.return_value = 0
-        chunks = [_chunk("QnAs1", 0, "a"), _chunk("QnAs1", 1, "b"), _chunk("Offers3", 0, "c")]
+        entries = [_entry("QnAs1", "a"), _entry("QnAs2", "b"), _entry("Offers3", "c")]
 
-        n = store.add_documents(chunks)
+        n = store.add_documents(entries)
 
         assert n == 3
         kwargs = store.langchain_client.add_texts.call_args.kwargs
         assert kwargs["texts"] == ["a", "b", "c"]
-        assert kwargs["ids"] == ["QnAs1_0", "QnAs1_1", "Offers3_0"]
+        # one entry per Q&A/offer: the google_index is the document key
+        assert kwargs["ids"] == ["QnAs1", "QnAs2", "Offers3"]
         assert all(m["embedding_model"] == "emb-model" for m in kwargs["metadatas"])
         # caller's metadata is left untouched
-        assert "embedding_model" not in chunks[0].metadata
+        assert "embedding_model" not in entries[0].metadata
         azure["SearchIndexClient"].return_value.delete_index.assert_not_called()
 
     def test_replaces_existing_index_when_not_empty(self, azure):
         store = _store()
         store.client.get_document_count.return_value = 42
 
-        store.add_documents([_chunk("QnAs1", 0)])
+        store.add_documents([_entry("QnAs1")])
 
         index_client = azure["SearchIndexClient"].return_value
         index_client.delete_index.assert_called_once_with("idx")
@@ -144,12 +145,10 @@ class TestFactories:
             create_vector_store_index("googlesheet", "Sheet_1", {})
         assert exc.value.status_code == 400
 
-    @patch("utils.vector_store.DocumentChunker")
     @patch("utils.vector_store.DocumentLoader")
-    def test_create_index_loads_chunks_and_adds(self, mock_loader, mock_chunker, azure):
-        docs = [Document(page_content="x", metadata={"google_index": "QnAs1"})]
+    def test_create_index_adds_one_entry_per_loaded_document(self, mock_loader, azure):
+        docs = [_entry("QnAs1", "x"), _entry("Offers2", "y")]
         mock_loader.return_value.load.return_value = docs
-        mock_chunker.return_value.split_documents.return_value = [_chunk("QnAs1", 0, "x")]
         azure["SearchClient"].return_value.get_document_count.return_value = 0
 
         store = create_vector_store_index("json", "Sheet_1", {"values": []})
@@ -157,9 +156,11 @@ class TestFactories:
         mock_loader.assert_called_once_with(
             document_type="json", document_id="Sheet_1", document_data={"values": []}
         )
-        mock_chunker.return_value.split_documents.assert_called_once_with(documents=docs)
         assert store.store_id == "sheet1"
-        store.langchain_client.add_texts.assert_called_once()
+        # loaded documents are indexed as they are, never split into chunks
+        kwargs = store.langchain_client.add_texts.call_args.kwargs
+        assert kwargs["texts"] == ["x", "y"]
+        assert kwargs["ids"] == ["QnAs1", "Offers2"]
 
     @patch("utils.vector_store.create_vector_store_index")
     def test_get_vector_store_returns_existing(self, mock_create, azure):
@@ -206,13 +207,11 @@ class TestStoreCache:
         # the unchecked call did not short-circuit the later existence check
         azure["SearchClient"].return_value.get_document_count.assert_called_once()
 
-    @patch("utils.vector_store.DocumentChunker")
     @patch("utils.vector_store.DocumentLoader")
-    def test_created_index_replaces_cache_entry(self, mock_loader, mock_chunker, azure):
+    def test_created_index_replaces_cache_entry(self, mock_loader, azure):
         azure["SearchClient"].return_value.get_document_count.return_value = 10
         stale = get_vector_store("ABC", check_if_exists=True)
-        mock_loader.return_value.load.return_value = [Document(page_content="x")]
-        mock_chunker.return_value.split_documents.return_value = [_chunk("QnAs1", 0)]
+        mock_loader.return_value.load.return_value = [_entry("QnAs1")]
 
         fresh = create_vector_store_index("googlesheet", "ABC", {})
 

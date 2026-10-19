@@ -50,14 +50,15 @@ def _tool_call_msg(query: str) -> AIMessage:
     )
 
 
-def _chunk(text: str, google_index: str, nth_chunk: int = 0) -> Document:
-    return Document(
-        page_content=text,
-        metadata={"google_index": google_index, "nth_chunk": nth_chunk, "question": f"Q {google_index}"},
-    )
+def _entry(text: str, google_index: str) -> Document:
+    return Document(page_content=text, metadata={"google_index": google_index, "question": f"Q {google_index}"})
 
 
-DOCS_AND_SCORES = [(_chunk("doc A", "QnAs1"), 0.9), (_chunk("doc B", "QnAs2"), 0.8)]
+def _docs_and_scores() -> list[tuple[Document, float]]:
+    # fresh objects per test: retrieve() writes the score into each doc's metadata
+    return [(_entry("doc A", "QnAs1"), 0.9), (_entry("doc B", "QnAs2"), 0.8)]
+
+
 DOCS = [
     Document(page_content="doc A", metadata={"google_index": "QnAs1", "question": "Q QnAs1", "score": 0.9}),
     Document(page_content="doc B", metadata={"google_index": "QnAs2", "question": "Q QnAs2", "score": 0.8}),
@@ -75,7 +76,7 @@ CONFIG = {
 def vector_store(monkeypatch):
     monkeypatch.delenv("RETRIEVAL_K", raising=False)
     store = MagicMock()
-    store.similarity_search_with_score.return_value = DOCS_AND_SCORES
+    store.similarity_search_with_score.side_effect = lambda *args, **kwargs: _docs_and_scores()
     with patch.object(rag_agent, "get_vector_store", return_value=store) as gvs:
         yield gvs
 
@@ -224,34 +225,6 @@ def test_langfuse_generations_nest_under_root_span_from_graph_threads(vector_sto
 def test_retrieve_tool_schema_hides_sheet_id():
     """The LLM only sees `query`; the sheet id is injected from config."""
     assert set(rag_agent.retrieve.args) == {"query"}
-
-
-def test_merge_chunks_gives_one_document_per_google_index():
-    merged = rag_agent.merge_chunks(
-        [
-            (_chunk("long answer, part 2", "QnAs1", nth_chunk=1), 0.91),
-            (_chunk("offer", "Offers4"), 0.85),
-            (_chunk("long answer, part 1", "QnAs1", nth_chunk=0), 0.80),
-            (_chunk("short answer", "QnAs7"), 0.95),
-        ]
-    )
-
-    # ranked by each source's best chunk; chunks joined in their original order
-    assert [doc.page_content for doc in merged] == [
-        "short answer",
-        "long answer, part 1 long answer, part 2",
-        "offer",
-    ]
-    assert [doc.metadata["score"] for doc in merged] == [0.95, 0.91, 0.85]
-    assert merged[1].metadata["google_index"] == "QnAs1"
-    assert all("nth_chunk" not in doc.metadata for doc in merged)
-
-
-def test_merge_chunks_keeps_documents_without_google_index_apart():
-    merged = rag_agent.merge_chunks(
-        [(Document(page_content="a"), 0.5), (Document(page_content="b"), 0.7)]
-    )
-    assert [doc.page_content for doc in merged] == ["b", "a"]
 
 
 def test_retrieval_k_is_configurable(vector_store, monkeypatch):
