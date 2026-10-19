@@ -309,14 +309,36 @@ def test_get_llm_uses_azure_env(monkeypatch):
     monkeypatch.setenv("OPENAI_ENDPOINT", "https://oai.example")
     monkeypatch.setenv("MODEL_CHAT", "gpt-test")
     monkeypatch.setenv("OPENAI_API_VERSION", "2024-06-01")
+    monkeypatch.delenv("LLM_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("LLM_MAX_RETRIES", raising=False)
 
     first = rag_agent._get_llm()
     second = rag_agent._get_llm()
 
+    # bounded by default so a stalled call fails inside Twilio's 15 s window
     llm_cls.assert_called_once_with(
         azure_endpoint="https://oai.example",
         azure_deployment="gpt-test",
         openai_api_version="2024-06-01",
         temperature=0.2,
+        timeout=6.0,
+        max_retries=0,
     )
     assert first is second
+
+
+def test_get_llm_timeout_and_retries_are_configurable(monkeypatch):
+    llm_cls = MagicMock(name="AzureChatOpenAI")
+    monkeypatch.setattr(rag_agent, "AzureChatOpenAI", llm_cls)
+    monkeypatch.setattr(rag_agent, "_llm", None)
+    monkeypatch.setenv("OPENAI_ENDPOINT", "https://oai.example")
+    monkeypatch.setenv("MODEL_CHAT", "gpt-test")
+    monkeypatch.setenv("OPENAI_API_VERSION", "2024-06-01")
+    monkeypatch.setenv("LLM_TIMEOUT_S", "4.5")
+    monkeypatch.setenv("LLM_MAX_RETRIES", "1")
+
+    rag_agent._get_llm()
+
+    kwargs = llm_cls.call_args.kwargs
+    assert kwargs["timeout"] == 4.5
+    assert kwargs["max_retries"] == 1

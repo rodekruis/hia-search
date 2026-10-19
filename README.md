@@ -229,7 +229,7 @@ Every response carries an `x-request-id` header. Unexpected failures return a st
 * `500 internal_error`: unexpected error; details are only in the server logs.
 * `422 validation_error`: invalid input.
 
-The Twilio webhook never returns these: if a reply cannot be generated, the user receives a short fallback message instead.
+The Twilio webhook never returns these: if a reply cannot be generated, the user receives a short fallback message instead. Twilio only waits 15 seconds for the reply, so each chat-model call is bounded by `LLM_TIMEOUT_S` (default 6 s) and is not retried (`LLM_MAX_RETRIES`, default 0): a turn makes up to two calls, and a stalled or throttled call fails in time for the fallback message to be delivered rather than leaving the user without any reply.
 
 ### Logging & privacy
 

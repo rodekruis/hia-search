@@ -25,6 +25,13 @@ _checkpointer_pool = None
 # Number of recent human/AI messages passed to the LLM
 _HISTORY_WINDOW = 10
 
+# Twilio drops a webhook reply after 15 s and a turn makes up to two sequential
+# LLM calls, so each call must fail fast enough for the fallback message to be
+# delivered. Retries are off by default: the client honours Retry-After (up to
+# 60 s) and retries timeouts, either of which would exceed that budget.
+_DEFAULT_LLM_TIMEOUT_S = 6.0
+_DEFAULT_LLM_MAX_RETRIES = 0
+
 
 class RagState(MessagesState):
     """Conversation state: `messages` holds only human/AI turns; docs live apart."""
@@ -48,6 +55,8 @@ def _get_llm():
             azure_deployment=os.environ["MODEL_CHAT"],
             openai_api_version=os.environ["OPENAI_API_VERSION"],
             temperature=0.2,
+            timeout=float(os.environ.get("LLM_TIMEOUT_S", _DEFAULT_LLM_TIMEOUT_S)),
+            max_retries=int(os.environ.get("LLM_MAX_RETRIES", _DEFAULT_LLM_MAX_RETRIES)),
         )
     return _llm
 
