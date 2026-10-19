@@ -62,7 +62,7 @@ sequenceDiagram
 
 1. User sends a query via the `/search`, `/chat-dummy`, or `/chat-twilio-webhook` endpoint.
 2. The query is translated to English (if needed) using Microsoft Cognitive Services.
-3. Relevant Q&A documents are retrieved from Azure AI Search. For chat endpoints, the LLM first decides whether the message needs a search (greetings and small talk don't; when in doubt it searches) and, in the same call, rewrites follow-ups such as "are you sure?" into a standalone search query using the conversation history.
+3. Relevant Q&A documents are retrieved from Azure AI Search. For chat endpoints, the LLM first decides whether the message needs a search (greetings and small talk don't; when in doubt it searches) and, in the same call, rewrites follow-ups such as "are you sure?" into a standalone search query using the conversation history. The index stores long Q&As and offers as several chunks: chat fetches `RETRIEVAL_K` chunks (default 10) and merges those of the same Q&A/offer into one document, ranked by its best score, so the model sees each source once.
 4. For chat endpoints, a LangGraph RAG agent passes the documents + conversation history to Azure OpenAI to generate a response.
 5. The response is translated back to the user's language.
 
@@ -272,6 +272,7 @@ Each chat turn (`/chat-dummy`, `/chat-twilio-webhook`) is one root span named `c
 * `metadata.retrieval_used`, `n_docs`, `detected_lang`
 * `metadata.message_en`, `metadata.answer_en`: the English text the model actually saw and produced, for judges that should not compare across languages
 * `metadata.retrieved_context` (the documents exactly as fed to the model) and `metadata.search_query` (the query the model wrote for retrieval), present only when `retrieval_used` is true
+* `metadata.top_score` and score `top_score` (numeric): best similarity score among the retrieved documents, present only when `retrieval_used` is true
 * `metadata.conversation_history`: prior turns as a plain transcript, current turn excluded
 
 `/chat-dummy` returns `traceId`; `POST /feedback` `{"traceId": ..., "positive": true|false, "comment": ...}` (read key) records it as a `user-feedback` score (1/0) on that trace. It returns 503 when chat tracing is disabled.
@@ -280,7 +281,7 @@ Each chat turn (`/chat-dummy`, `/chat-twilio-webhook`) is one root span named `c
 
 Configure **observation-level** evaluators (filter *Is Root Observation*; trace-level evaluators are deprecated):
 
-* Retrieval quality / missing content, both projects: `{{query}}` → Metadata `$.search_query`, `{{context}}` → Metadata `$.retrieved_context`. On chat, filter `metadata.retrieval_used = true` so small talk is skipped. Use rule filters (`top_score` below a threshold or `zero_results = true` on search, plus a small random sample) to run LLM judges only where it pays; a boolean "is the question answered by any of these documents?" judge yields the missing-content list per sheet.
+* Retrieval quality / missing content, both projects: `{{query}}` → Metadata `$.search_query`, `{{context}}` → Metadata `$.retrieved_context`. On chat, filter `metadata.retrieval_used = true` so small talk is skipped. Use rule filters (`top_score` below a threshold, on both projects, or `zero_results = true` on search, plus a small random sample) to run LLM judges only where it pays; a boolean "is the question answered by any of these documents?" judge yields the missing-content list per sheet.
 * Faithfulness on chat: `{{answer}}` → Metadata `$.answer_en`, `{{context}}` → Metadata `$.retrieved_context`, `{{question}}` → Metadata `$.search_query`.
 * User-facing judges (e.g. distress detection) on chat: `{{history}}` → Metadata `$.conversation_history`, `{{message}}` → Input.
 

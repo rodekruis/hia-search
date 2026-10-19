@@ -50,7 +50,18 @@ def _tool_call_msg(query: str) -> AIMessage:
     )
 
 
-DOCS = [Document(page_content="doc A"), Document(page_content="doc B")]
+def _chunk(text: str, google_index: str, nth_chunk: int = 0) -> Document:
+    return Document(
+        page_content=text,
+        metadata={"google_index": google_index, "nth_chunk": nth_chunk, "question": f"Q {google_index}"},
+    )
+
+
+DOCS_AND_SCORES = [(_chunk("doc A", "QnAs1"), 0.9), (_chunk("doc B", "QnAs2"), 0.8)]
+DOCS = [
+    Document(page_content="doc A", metadata={"google_index": "QnAs1", "question": "Q QnAs1", "score": 0.9}),
+    Document(page_content="doc B", metadata={"google_index": "QnAs2", "question": "Q QnAs2", "score": 0.8}),
+]
 CONFIG = {
     "configurable": {
         "thread_id": "t1",
@@ -61,9 +72,10 @@ CONFIG = {
 
 
 @pytest.fixture()
-def vector_store():
+def vector_store(monkeypatch):
+    monkeypatch.delenv("RETRIEVAL_K", raising=False)
     store = MagicMock()
-    store.similarity_search.return_value = DOCS
+    store.similarity_search_with_score.return_value = DOCS_AND_SCORES
     with patch.object(rag_agent, "get_vector_store", return_value=store) as gvs:
         yield gvs
 
@@ -78,6 +90,7 @@ def test_retrieval_turn_keeps_docs_in_state_and_prunes_scaffolding(vector_store)
     # sheet id comes from config, not from the LLM's tool args; existence was
     # already verified by chat(), so the tool takes the cached store
     vector_store.assert_called_once_with("sheet-xyz")
+    vector_store.return_value.similarity_search_with_score.assert_called_once_with("housing", k=10)
     assert result["retrieved_docs"] == DOCS
     assert result["search_query"] == "housing"
     assert result["messages"][-1].content == "final answer"
@@ -211,6 +224,45 @@ def test_langfuse_generations_nest_under_root_span_from_graph_threads(vector_sto
 def test_retrieve_tool_schema_hides_sheet_id():
     """The LLM only sees `query`; the sheet id is injected from config."""
     assert set(rag_agent.retrieve.args) == {"query"}
+
+
+def test_merge_chunks_gives_one_document_per_google_index():
+    merged = rag_agent.merge_chunks(
+        [
+            (_chunk("long answer, part 2", "QnAs1", nth_chunk=1), 0.91),
+            (_chunk("offer", "Offers4"), 0.85),
+            (_chunk("long answer, part 1", "QnAs1", nth_chunk=0), 0.80),
+            (_chunk("short answer", "QnAs7"), 0.95),
+        ]
+    )
+
+    # ranked by each source's best chunk; chunks joined in their original order
+    assert [doc.page_content for doc in merged] == [
+        "short answer",
+        "long answer, part 1 long answer, part 2",
+        "offer",
+    ]
+    assert [doc.metadata["score"] for doc in merged] == [0.95, 0.91, 0.85]
+    assert merged[1].metadata["google_index"] == "QnAs1"
+    assert all("nth_chunk" not in doc.metadata for doc in merged)
+
+
+def test_merge_chunks_keeps_documents_without_google_index_apart():
+    merged = rag_agent.merge_chunks(
+        [(Document(page_content="a"), 0.5), (Document(page_content="b"), 0.7)]
+    )
+    assert [doc.page_content for doc in merged] == ["b", "a"]
+
+
+def test_retrieval_k_is_configurable(vector_store, monkeypatch):
+    monkeypatch.setenv("RETRIEVAL_K", "4")
+
+    rag_agent.retrieve.invoke(
+        {"type": "tool_call", "name": "retrieve", "id": "c1", "args": {"query": "housing"}},
+        config=CONFIG,
+    )
+
+    vector_store.return_value.similarity_search_with_score.assert_called_once_with("housing", k=4)
 
 
 def test_retrieve_tool_asks_for_standalone_query_and_biases_towards_search():

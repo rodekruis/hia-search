@@ -754,7 +754,10 @@ class TestChatTracing:
         mock_agent = MagicMock()
         mock_agent.invoke.return_value = {
             "messages": [prior_user, prior_bot, current_user, answer],
-            "retrieved_docs": [Document(page_content="doc A"), Document(page_content="doc B")],
+            "retrieved_docs": [
+                Document(page_content="doc A", metadata={"score": 0.82}),
+                Document(page_content="doc B", metadata={"score": 0.77}),
+            ],
             "search_query": "where is a doctor",
         }
         mock_get_agent.return_value = mock_agent
@@ -789,7 +792,9 @@ class TestChatTracing:
             "conversation_history": "user: earlier q\nassistant: earlier a",
             "retrieved_context": "Document: doc A\n\nDocument: doc B",
             "search_query": "where is a doctor",
+            "top_score": 0.82,
         }
+        span.score.assert_called_once_with(name="top_score", value=0.82, data_type="NUMERIC")
 
     @patch("routes.chat.get_vector_store")
     @patch("routes.chat.detect_language", return_value="en")
@@ -808,6 +813,8 @@ class TestChatTracing:
         metadata = span.update.call_args.kwargs["metadata"]
         assert metadata["retrieval_used"] is False and metadata["n_docs"] == 0
         assert "retrieved_context" not in metadata and "search_query" not in metadata
+        assert "top_score" not in metadata
+        span.score.assert_not_called()
 
     @patch("routes.chat.get_vector_store")
     @patch("routes.chat.detect_language", return_value="en")

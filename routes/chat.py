@@ -15,6 +15,7 @@ import logging
 import uuid
 from time import perf_counter
 from utils.translator import translate, detect_language
+from utils.constants import DocumentMetadata as dm
 
 logger = logging.getLogger(__name__)
 
@@ -99,9 +100,14 @@ def chat(
                 "conversation_history": _conversation_history(response.get("messages") or []),
             }
             if docs:
+                top_score = max(float(doc.metadata.get(dm.SCORE, 0.0)) for doc in docs)
                 metadata["retrieved_context"] = format_context(docs)
                 metadata["search_query"] = response.get("search_query") or message
+                metadata["top_score"] = top_score
             span.update(output=response_text, metadata=metadata)
+            if docs:
+                # cheap deterministic score, same as on search: pre-filter for LLM judges
+                span.score(name="top_score", value=top_score, data_type="NUMERIC")
             trace_id = span.trace_id
 
     # Metadata only: conversation content is recorded in the LLM observability
