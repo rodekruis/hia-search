@@ -13,7 +13,7 @@ from psycopg_pool import ConnectionPool
 import os
 from urllib.parse import quote
 from utils.vector_store import get_vector_store
-from utils.prompt_loader import get_direct_answer_prompt
+from utils.prompt_loader import get_direct_answer_prompt, get_language_prompt
 from utils.constants import DocumentMetadata as dm
 from dotenv import load_dotenv
 
@@ -125,7 +125,9 @@ def query_or_respond(state: RagState, config: RunnableConfig) -> dict:
     llm_with_tools = _get_llm().bind_tools([retrieve])
     # This call answers directly when it skips retrieval, so it also gets the
     # direct-answer rules; generate() must not, as it answers from documents.
-    system_prompt = f"{_system_prompt(config)}\n\n{get_direct_answer_prompt()}"
+    system_prompt = "\n\n".join(
+        [_system_prompt(config).rstrip(), get_direct_answer_prompt(), get_language_prompt()]
+    )
     prompt = [SystemMessage(system_prompt)] + _conversation(state)
     response = llm_with_tools.invoke(prompt, config=_llm_config(config))
 
@@ -155,9 +157,16 @@ def generate(state: RagState, config: RunnableConfig):
             search_query = str(message.tool_calls[0]["args"].get("query", ""))
 
     # "(none)" makes an empty search explicit, so the prompt's "no documents"
-    # rule applies instead of the model answering from memory
+    # rule applies instead of the model answering from memory. The language
+    # rules come last: English documents otherwise pull the reply into English.
     context = format_context(docs) or "(none)"
-    system_prompt = f"{_system_prompt(config).rstrip()}\n\nContext documents:\n{context}"
+    system_prompt = "\n\n".join(
+        [
+            _system_prompt(config).rstrip(),
+            f"Context documents:\n{context}",
+            get_language_prompt(),
+        ]
+    )
     prompt = [SystemMessage(system_prompt)] + _conversation(state)
 
     response = _get_llm().invoke(prompt, config=_llm_config(config))

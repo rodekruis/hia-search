@@ -14,7 +14,6 @@ import hashlib
 import logging
 import uuid
 from time import perf_counter
-from utils.translator import translate, detect_language
 from utils.constants import DocumentMetadata as dm
 
 logger = logging.getLogger(__name__)
@@ -39,31 +38,29 @@ def chat(
     include_context: bool = False,
     channel: str = "dummy",
 ) -> dict:
-    """Core chat function used by multiple endpoints."""
+    """Core chat function used by multiple endpoints.
+
+    Messages go to the model as written and it answers in the user's language
+    (see config/language_prompt.txt); only its retrieval queries are in English,
+    matching the English index.
+    """
     started = perf_counter()
-    original_message = message
 
     # ensure the vector store exists (created from the sheet if not); cached after the
     # first call, so this is the only existence check per turn
     _ = get_vector_store(googleSheetId, check_if_exists=True)
 
-    # detected before the span opens so the language can be a trace tag
-    detected_lang = detect_language(message)
-    tags = [f"sheet:{googleSheetId}", f"channel:{channel}", f"lang:{detected_lang}"]
+    tags = [f"sheet:{googleSheetId}", f"channel:{channel}"]
 
     trace_id = None
     with observe(
         "chat-turn",
         project="chat",
-        input=original_message,
+        input=message,
         tags=tags,
         session_id=threadId,
         user_id=threadId,
     ) as span:
-        # translate message to English if needed
-        if detected_lang != "en":
-            message = translate(from_lang=detected_lang, to_lang="en", text=message)
-
         prompt = get_system_prompt(googleSheetId)
 
         # invoke the agent graph with the question; prompt and sheet id travel in the
@@ -79,24 +76,15 @@ def chat(
                 },
             },
         )
-        answer_en = response["messages"][-1].content
+        response_text = response["messages"][-1].content
         docs = response.get("retrieved_docs") or []
-        response_text = answer_en
-
-        # translate response back to original language if needed
-        if detected_lang != "en":
-            response_text = translate(from_lang="en", to_lang=detected_lang, text=answer_en)
 
         if span is not None:
             # Same keys as the search span: one evaluator mapping serves both channels.
-            # retrieval_used gates RAG judges so they skip small talk; *_en fields let
-            # judges compare answer and context in the same language.
+            # retrieval_used gates RAG judges so they skip small talk.
             metadata = {
                 "retrieval_used": bool(docs),
                 "n_docs": len(docs),
-                "detected_lang": detected_lang,
-                "message_en": message,
-                "answer_en": answer_en,
                 "conversation_history": _conversation_history(response.get("messages") or []),
             }
             if docs:
@@ -118,10 +106,9 @@ def chat(
             "googleSheetId": googleSheetId,
             "threadId": threadId,
             "channel": channel,
-            "detected_lang": detected_lang,
             "retrieval_used": bool(docs),
             "n_docs": len(docs),
-            "message_chars": len(original_message),
+            "message_chars": len(message),
             "response_chars": len(response_text),
             "duration_ms": round((perf_counter() - started) * 1000),
         },

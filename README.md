@@ -37,34 +37,31 @@ sequenceDiagram
 sequenceDiagram
     participant User
     participant API as FastAPI
-    participant T as Azure Translator
     participant Agent as LangGraph RAG Agent
     participant VS as Azure AI Search
     participant DB as PostgreSQL
     participant LLM as Azure OpenAI
 
-    User->>API: message
-    API->>T: detect language + translate to EN
-    T-->>API: English message
+    User->>API: message (any language)
     API->>Agent: invoke with message + thread ID
     Agent->>DB: load conversation history
     DB-->>Agent: previous messages
+    Agent->>LLM: search or reply directly? (writes an English query)
+    LLM-->>Agent: retrieve tool call
     Agent->>VS: retrieve relevant docs
-    VS-->>Agent: Q&A documents
+    VS-->>Agent: Q&A documents (English)
     Agent->>LLM: prompt + docs + history
-    LLM-->>Agent: generated response
+    LLM-->>Agent: response in the user's language
     Agent->>DB: save new messages
     Agent-->>API: response
-    API->>T: translate response to user lang
-    T-->>API: localized response
     API-->>User: answer
 ```
 
 1. User sends a query via the `/search`, `/chat-dummy`, or `/chat-twilio-webhook` endpoint.
-2. The query is translated to English (if needed) using Microsoft Cognitive Services.
+2. For `/search`, the query is translated to English (if needed) using Microsoft Cognitive Services. Chat messages are not machine-translated: the LLM reads them as written and writes its search query in English.
 3. Relevant Q&A documents are retrieved from Azure AI Search. For chat endpoints, the LLM first decides whether the message needs a search (greetings and small talk don't; when in doubt it searches) and, in the same call, rewrites follow-ups such as "are you sure?" into a standalone search query using the conversation history. The index holds one document per Q&A or offer (never split into chunks), so search and chat retrieve whole entries; chat retrieves `RETRIEVAL_K` of them (default 10).
-4. For chat endpoints, a LangGraph RAG agent passes the documents + conversation history to Azure OpenAI to generate a response.
-5. The response is translated back to the user's language.
+4. For chat endpoints, a LangGraph RAG agent passes the documents + conversation history to Azure OpenAI to generate a response, directly in the user's language.
+5. For `/search`, the results are translated to the requested language.
 
 ## Prerequisites
 
@@ -73,7 +70,7 @@ sequenceDiagram
 - An [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/) deployment (chat + embeddings models)
 - An [Azure AI Search](https://learn.microsoft.com/en-us/azure/search/) service
 - A [PostgreSQL](https://www.postgresql.org/) database (for conversation history)
-- A [Microsoft Cognitive Services](https://learn.microsoft.com/en-us/azure/cognitive-services/translator/) Translator resource
+- A [Microsoft Cognitive Services](https://learn.microsoft.com/en-us/azure/cognitive-services/translator/) Translator resource (for `/search` and for translating the indexed content to English; chat does not use it)
 - (Optional) A [Twilio](https://www.twilio.com/) account with an active phone/WhatsApp number
 - (Optional) An [Azure Application Insights](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview) resource for monitoring
 
@@ -88,7 +85,7 @@ See [`example.env`](./example.env) for all required environment variables.
 >[!NOTE]
 >The instructions that the chatbot will follow are by default [these ones](config/rag_agent_prompt.txt). If you want to customize them, create a new sheet named `Chat` in your HIA Google Sheet file following [this template](https://docs.google.com/spreadsheets/d/1op6Ouyxtwv4f8GAEAMSn5PVzcXtfZuftMiLYWsX0pbs/edit?pli=1&gid=1707339525#gid=1707339525), then insert the desired instructions under `#VALUE`, cell `B2`. Make sure to follow [best practices in prompt engineering](https://www.promptingguide.ai/introduction/tips); if it's the first time you do this, make sure the CEA Data Specialist reviews what you wrote. Prompt changes take effect within 5 minutes (`PROMPT_CACHE_TTL_S`), without a redeploy.
 >
->Keep the section structure of the default prompt: `# Role`, `# Scope`, `# Answering` (rules for answering from the retrieved documents, e.g. the reply when nothing relevant is found) and `# Conversation`. When the chatbot replies without searching (greetings, thanks, small talk, off-topic requests), [these instance-agnostic rules](config/direct_answer_prompt.txt) are appended to the prompt: they tell the model to follow `# Role`, `# Scope` and `# Conversation` but ignore `# Answering`, so a greeting gets a greeting back instead of the "no information" reply.
+>Keep the section structure of the default prompt: `# Role`, `# Scope`, `# Answering` (rules for answering from the retrieved documents, e.g. the reply when nothing relevant is found) and `# Conversation`. When the chatbot replies without searching (greetings, thanks, small talk, off-topic requests), [these instance-agnostic rules](config/direct_answer_prompt.txt) are appended to the prompt: they tell the model to follow `# Role`, `# Scope` and `# Conversation` but ignore `# Answering`, so a greeting gets a greeting back instead of the "no information" reply. [Language rules](config/language_prompt.txt) are appended to every prompt as well: chat messages are not machine-translated, so the model always replies in the user's language (fixed replies included) while writing its search queries in English. A custom prompt therefore does not need its own language instructions.
 
 ### 2. Set up the search service
   - Find the item called `HIA Search API-key(s) [production]` in Bitwarden and copy the value of `API_KEY`
@@ -236,7 +233,7 @@ The Twilio webhook never returns these: if a reply cannot be generated, the user
 
 ### Logging & privacy
 
-Application logs (Azure Application Insights) contain **metadata only**: sheet id, hashed thread id, detected language, whether retrieval was used, message/response lengths, durations and error traces. Every record also carries `environment` (from `ENVIRONMENT`, default `prod`) so dev and prod can be separated in queries. User messages, replies, search queries and phone numbers are never written to application logs. Conversation content is recorded exclusively in Langfuse (see below), with its own access control and retention.
+Application logs (Azure Application Insights) contain **metadata only**: sheet id, hashed thread id, whether retrieval was used, message/response lengths, durations and error traces. Every record also carries `environment` (from `ENVIRONMENT`, default `prod`) so dev and prod can be separated in queries. User messages, replies, search queries and phone numbers are never written to application logs. Conversation content is recorded exclusively in Langfuse (see below), with its own access control and retention.
 
 ### Application Insights (infrastructure telemetry)
 
@@ -269,11 +266,10 @@ Each `/search` request is one root span named `search`, tagged `sheet:<googleShe
 
 #### Chat
 
-Each chat turn (`/chat-dummy`, `/chat-twilio-webhook`) is one root span named `chat-turn`, with `session_id` = `user_id` = the thread id (hashed sender on Twilio), tagged `sheet:<googleSheetId>`, `channel:twilio|dummy`, `lang:<detected>`. The LangGraph steps (`query_or_respond`, `tools`, `generate`) nest underneath with model, tokens and cost.
+Each chat turn (`/chat-dummy`, `/chat-twilio-webhook`) is one root span named `chat-turn`, with `session_id` = `user_id` = the thread id (hashed sender on Twilio), tagged `sheet:<googleSheetId>`, `channel:twilio|dummy`. The LangGraph steps (`query_or_respond`, `tools`, `generate`) nest underneath with model, tokens and cost.
 
-* `input`: the user's message verbatim, in their language; `output`: the reply as sent to the user
-* `metadata.retrieval_used`, `n_docs`, `detected_lang`
-* `metadata.message_en`, `metadata.answer_en`: the English text the model actually saw and produced, for judges that should not compare across languages
+* `input`: the user's message verbatim, in their language; `output`: the reply as sent to the user, written by the model in the user's language (no machine translation)
+* `metadata.retrieval_used`, `n_docs`
 * `metadata.retrieved_context` (the documents exactly as fed to the model, numbered `[1] …`, `[2] …` in rank order) and `metadata.search_query` (the query the model wrote for retrieval), present only when `retrieval_used` is true
 * `metadata.top_score` and score `top_score` (numeric): best similarity score among the retrieved documents, present only when `retrieval_used` is true
 * `metadata.conversation_history`: prior turns as a plain transcript, current turn excluded
@@ -285,7 +281,7 @@ Each chat turn (`/chat-dummy`, `/chat-twilio-webhook`) is one root span named `c
 Configure **observation-level** evaluators (filter *Is Root Observation*; trace-level evaluators are deprecated):
 
 * Retrieval quality / missing content, both projects: `{{query}}` → Metadata `$.search_query`, `{{context}}` → Metadata `$.retrieved_context`. On chat, filter `metadata.retrieval_used = true` so small talk is skipped. Use rule filters (`top_score` below a threshold, on both projects, or `zero_results = true` on search, plus a small random sample) to run LLM judges only where it pays; a boolean "is the question answered by any of these documents?" judge yields the missing-content list per sheet.
-* Faithfulness on chat: `{{answer}}` → Metadata `$.answer_en`, `{{context}}` → Metadata `$.retrieved_context`, `{{question}}` → Metadata `$.search_query`.
+* Faithfulness on chat: `{{answer}}` → Output, `{{context}}` → Metadata `$.retrieved_context`, `{{question}}` → Metadata `$.search_query`. The answer is in the user's language and the context in English, so tell the judge to compare across languages.
 * User-facing judges (e.g. distress detection) on chat: `{{history}}` → Metadata `$.conversation_history`, `{{message}}` → Input.
 
 ## Configuration

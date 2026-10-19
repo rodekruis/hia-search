@@ -339,6 +339,14 @@ class TestGetSystemPrompt:
             assert f"{section}\n" in default.replace("\r\n", "\n")
             assert section in direct
 
+    def test_language_prompt_keeps_retrieval_queries_in_english(self):
+        import utils.prompt_loader as pl
+
+        language = pl.get_language_prompt()
+        assert language.startswith("# Language")
+        # the index is English: only the search query is written in English
+        assert "search query in English" in language
+
 
 # ---------------------------------------------------------------------------
 # auth.py

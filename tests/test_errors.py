@@ -24,7 +24,6 @@ def _chat_failing_with(exc: Exception):
     agent.invoke.side_effect = exc
     return (
         patch("routes.chat.get_vector_store"),
-        patch("routes.chat.detect_language", return_value="en"),
         patch("routes.chat.get_system_prompt", return_value="prompt"),
         patch("routes.chat.get_rag_agent", return_value=agent),
     )
@@ -49,8 +48,8 @@ class TestRequestId:
 class TestErrorHandlers:
     def test_external_service_error_returns_502(self):
         exc = APIConnectionError(request=MagicMock())
-        p1, p2, p3, p4 = _chat_failing_with(exc)
-        with p1, p2, p3, p4:
+        p1, p2, p3 = _chat_failing_with(exc)
+        with p1, p2, p3:
             resp = _post_chat(_client())
 
         assert resp.status_code == 502
@@ -61,8 +60,8 @@ class TestErrorHandlers:
         assert "APIConnectionError" not in resp.text
 
     def test_azure_error_returns_502(self):
-        p1, p2, p3, p4 = _chat_failing_with(HttpResponseError("index gone"))
-        with p1, p2, p3, p4:
+        p1, p2, p3 = _chat_failing_with(HttpResponseError("index gone"))
+        with p1, p2, p3:
             resp = _post_chat(_client())
 
         assert resp.status_code == 502
@@ -70,8 +69,8 @@ class TestErrorHandlers:
         assert "index gone" not in resp.text
 
     def test_unexpected_error_returns_500_without_details(self):
-        p1, p2, p3, p4 = _chat_failing_with(RuntimeError("secret internals"))
-        with p1, p2, p3, p4:
+        p1, p2, p3 = _chat_failing_with(RuntimeError("secret internals"))
+        with p1, p2, p3:
             resp = _post_chat(_client())
 
         assert resp.status_code == 500
@@ -81,8 +80,8 @@ class TestErrorHandlers:
         assert "secret internals" not in resp.text
 
     def test_value_error_returns_422(self):
-        p1, p2, p3, p4 = _chat_failing_with(ValueError("bad input"))
-        with p1, p2, p3, p4:
+        p1, p2, p3 = _chat_failing_with(ValueError("bad input"))
+        with p1, p2, p3:
             resp = _post_chat(_client())
 
         assert resp.status_code == 422

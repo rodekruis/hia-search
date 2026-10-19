@@ -98,10 +98,14 @@ def test_retrieval_turn_keeps_docs_in_state_and_prunes_scaffolding(vector_store)
     # persisted history holds only the human/AI exchange
     assert [m.type for m in result["messages"]] == ["human", "ai"]
 
-    # system prompt from config; numbered docs under a header in the generate prompt
+    # system prompt from config; numbered docs under a header in the generate prompt;
+    # the language rules close both prompts (nothing is machine-translated)
     direct_rules = rag_agent.get_direct_answer_prompt()
-    assert llm.prompts[0][0].content == f"You are HIA.\n\n{direct_rules}"
-    assert llm.prompts[1][0].content == "You are HIA.\n\nContext documents:\n[1] doc A\n\n[2] doc B"
+    language_rules = rag_agent.get_language_prompt()
+    assert llm.prompts[0][0].content == f"You are HIA.\n\n{direct_rules}\n\n{language_rules}"
+    assert llm.prompts[1][0].content == (
+        f"You are HIA.\n\nContext documents:\n[1] doc A\n\n[2] doc B\n\n{language_rules}"
+    )
     # direct-answer rules would tell the grounded answer to ignore # Answering
     assert direct_rules not in llm.prompts[1][0].content
 
@@ -118,7 +122,9 @@ def test_empty_search_is_explicit_in_the_generate_prompt(vector_store):
         result = graph.invoke({"messages": [("human", "where can I live?")]}, config)
 
     assert result["retrieved_docs"] == []
-    assert llm.prompts[1][0].content == "You are HIA.\n\nContext documents:\n(none)"
+    assert llm.prompts[1][0].content == (
+        f"You are HIA.\n\nContext documents:\n(none)\n\n{rag_agent.get_language_prompt()}"
+    )
 
 
 def test_direct_answer_resets_retrieved_docs(vector_store):
