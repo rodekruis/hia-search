@@ -3,17 +3,19 @@ from langchain_core.documents import Document
 from typing_extensions import Annotated, List
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, MessagesState
-from langchain.messages import SystemMessage, RemoveMessage
+from langchain.messages import AIMessage, HumanMessage, SystemMessage, RemoveMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.graph import END
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg_pool import ConnectionPool
+from openai import BadRequestError
 import os
 from urllib.parse import quote
 from utils.vector_store import get_vector_store
-from utils.prompt_loader import get_direct_answer_prompt, get_language_prompt
+from utils.prompt_loader import get_direct_answer_prompt, get_language_prompt, get_wellbeing_prompt
+from utils.translator import detect_language, translate
 from utils.constants import DocumentMetadata as dm
 from dotenv import load_dotenv
 
@@ -40,6 +42,28 @@ _DEFAULT_LLM_REASONING_EFFORT = "low"
 # Documents (one per Q&A or offer) retrieved per search (RETRIEVAL_K)
 _DEFAULT_RETRIEVAL_K = 10
 
+# Fixed replies (in English, translated to the user's language) for messages that
+# Azure's content filter blocks before the model sees them. {emergency} is filled
+# with the instance's emergency contact.
+FILTERED_REPLIES = {
+    "jailbreak": (
+        "Sorry, I can't help with that. I can only share information about the "
+        "support available through this service. What would you like to know?"
+    ),
+    "self_harm": (
+        "I'm really sorry you're going through this. You don't have to face it alone. "
+        "If you are in danger or thinking about ending your life, please {emergency} now. "
+        "You can also talk to a doctor or someone you trust. I'm here if you want to "
+        "ask about the support available to you through this service."
+    ),
+}
+DEFAULT_FILTERED_REPLY = (
+    "Sorry, I can't respond to that message. If you or someone else is in danger, "
+    "please {emergency}. You can ask me about the support available to you."
+)
+# when a message trips several filters, the first match picks the reply
+_FILTER_PRIORITY = ("jailbreak", "self_harm")
+
 
 class RagState(MessagesState):
     """Conversation state: `messages` holds only human/AI turns; docs live apart."""
@@ -47,6 +71,8 @@ class RagState(MessagesState):
     retrieved_docs: List[Document]
     # the query the model wrote for the retrieve tool this turn ("" when no retrieval)
     search_query: str
+    # content-filter category that blocked this turn's message ("" when not blocked)
+    blocked_category: str
 
 
 def format_context(docs: List[Document]) -> str:
@@ -90,6 +116,10 @@ def _system_prompt(config: RunnableConfig) -> str:
     return config["configurable"]["system_prompt"]
 
 
+def _support_contacts(config: RunnableConfig) -> dict[str, str]:
+    return config["configurable"].get("support_contacts") or {}
+
+
 def _llm_config(config: RunnableConfig) -> RunnableConfig:
     """Tracing callbacks for the LLM calls only.
 
@@ -106,6 +136,90 @@ def _conversation(state: RagState) -> list:
         for message in state["messages"]
         if message.type == "human" or (message.type == "ai" and not message.tool_calls)
     ][-_HISTORY_WINDOW:]
+
+
+def _prompt_filter_category(exc: BadRequestError) -> str | None:
+    """Category of a user prompt blocked by Azure's content filter; None for other errors."""
+    if exc.code != "content_filter":
+        return None
+    body = exc.body if isinstance(exc.body, dict) else {}
+    filters = body.get("content_filters") or []
+    if filters:
+        prompt_filters = [f for f in filters if f.get("source_type") == "prompt" and f.get("blocked")]
+    elif body.get("param") == "prompt":
+        prompt_filters = [{}]
+    else:
+        prompt_filters = []
+    if not prompt_filters:
+        return None
+    hits = [
+        category
+        for f in prompt_filters
+        for category, result in (f.get("content_filter_results") or {}).items()
+        if result.get("filtered")
+    ]
+    for category in _FILTER_PRIORITY:
+        if category in hits:
+            return category
+    return hits[0] if hits else "unknown"
+
+
+def _in_user_language(text: str, user_message: str) -> str:
+    language = detect_language(user_message)
+    if language == "en":
+        return text
+    return translate(from_lang="en", to_lang=language, text=text)
+
+
+def filtered_reply(category: str, support_contacts: dict[str, str]) -> str:
+    """Fixed English reply for a turn the content filter blocked."""
+    emergency = support_contacts.get("emergency")
+    action = (
+        f"contact emergency services ({emergency})"
+        if emergency
+        else "contact your local emergency services"
+    )
+    return FILTERED_REPLIES.get(category, DEFAULT_FILTERED_REPLY).format(emergency=action)
+
+
+# Blocked output is not an error: Azure returns an incomplete response, and LangChain
+# drops its content_filters extension, so the category is unknown.
+OUTPUT_FILTERED = "output"
+
+
+def _output_filtered(response: AIMessage) -> bool:
+    details = response.response_metadata.get("incomplete_details") or {}
+    return details.get("reason") == "content_filter"
+
+
+def _blocked_turn(
+    state: RagState,
+    config: RunnableConfig,
+    category: str,
+    scaffolding: list | None = None,
+    hide_message: bool = True,
+) -> dict:
+    """Fixed reply for a turn the content filter blocked.
+
+    A blocked user message is replaced in history by a placeholder: kept, it would
+    be sent again with every later turn and block the whole conversation until it
+    left the history window. When only the output was blocked, the message stays.
+    """
+    user_message = next(m for m in reversed(state["messages"]) if m.type == "human")
+    reply = filtered_reply(category, _support_contacts(config))
+    messages = [RemoveMessage(id=m.id) for m in (scaffolding or [])]
+    if hide_message:
+        messages += [
+            RemoveMessage(id=user_message.id),
+            HumanMessage(f"[Message hidden by the content filter: {category}]"),
+        ]
+    messages.append(AIMessage(_in_user_language(reply, user_message.text)))
+    return {
+        "messages": messages,
+        "retrieved_docs": [],
+        "search_query": "",
+        "blocked_category": category,
+    }
 
 
 _RETRIEVE_DESCRIPTION = (
@@ -147,14 +261,32 @@ def query_or_respond(state: RagState, config: RunnableConfig) -> dict:
     # This call answers directly when it skips retrieval, so it also gets the
     # direct-answer rules; generate() must not, as it answers from documents.
     system_prompt = "\n\n".join(
-        [_system_prompt(config).rstrip(), get_direct_answer_prompt(), get_language_prompt()]
+        [
+            _system_prompt(config).rstrip(),
+            get_direct_answer_prompt(),
+            get_wellbeing_prompt(_support_contacts(config)),
+            get_language_prompt(),
+        ]
     )
     prompt = [SystemMessage(system_prompt)] + _conversation(state)
-    response = llm_with_tools.invoke(prompt, config=_llm_config(config))
+    try:
+        response = llm_with_tools.invoke(prompt, config=_llm_config(config))
+    except BadRequestError as exc:
+        category = _prompt_filter_category(exc)
+        if category is None:
+            raise
+        return _blocked_turn(state, config, category)
+    if _output_filtered(response):
+        return _blocked_turn(state, config, OUTPUT_FILTERED, hide_message=False)
 
     # MessagesState appends messages to state instead of overwriting;
     # retrieved_docs/search_query are reset so a direct answer never reports stale context.
-    return {"messages": [response], "retrieved_docs": [], "search_query": ""}
+    return {
+        "messages": [response],
+        "retrieved_docs": [],
+        "search_query": "",
+        "blocked_category": "",
+    }
 
 
 # Generate a response using the retrieved content.
@@ -184,13 +316,22 @@ def generate(state: RagState, config: RunnableConfig):
     system_prompt = "\n\n".join(
         [
             _system_prompt(config).rstrip(),
+            get_wellbeing_prompt(_support_contacts(config)),
             f"Context documents:\n{context}",
             get_language_prompt(),
         ]
     )
     prompt = [SystemMessage(system_prompt)] + _conversation(state)
 
-    response = _get_llm().invoke(prompt, config=_llm_config(config))
+    try:
+        response = _get_llm().invoke(prompt, config=_llm_config(config))
+    except BadRequestError as exc:
+        category = _prompt_filter_category(exc)
+        if category is None:
+            raise
+        return _blocked_turn(state, config, category, scaffolding)
+    if _output_filtered(response):
+        return _blocked_turn(state, config, OUTPUT_FILTERED, scaffolding, hide_message=False)
 
     # Drop the scaffolding from persisted history: docs are kept in retrieved_docs
     # for this turn only, so the checkpoint does not grow by 20 documents per turn.

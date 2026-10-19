@@ -8,7 +8,7 @@ from utils.vector_store import get_vector_store
 from agents.rag_agent import format_context, get_rag_agent
 from utils.auth import require_read_key, require_twilio_signature
 from utils.messaging import number_chunks, split_message
-from utils.prompt_loader import get_system_prompt
+from utils.prompt_loader import get_support_contacts, get_system_prompt
 from utils.tracing import get_langfuse, langchain_callbacks, observe
 import hashlib
 import logging
@@ -63,8 +63,8 @@ def chat(
     ) as span:
         prompt = get_system_prompt(googleSheetId)
 
-        # invoke the agent graph with the question; prompt and sheet id travel in the
-        # run config so they are not persisted into the conversation history
+        # invoke the agent graph with the question; prompt, support contacts and sheet id
+        # travel in the run config so they are not persisted into the conversation history
         response = get_rag_agent().invoke(
             {"messages": [HumanMessage(message)]},
             config={
@@ -72,6 +72,7 @@ def chat(
                     "thread_id": threadId,
                     "googleSheetId": googleSheetId,
                     "system_prompt": prompt,
+                    "support_contacts": get_support_contacts(googleSheetId),
                     "llm_callbacks": langchain_callbacks("chat"),
                 },
             },
@@ -80,6 +81,7 @@ def chat(
         # (reasoning, text), so .content is not the answer string
         response_text = response["messages"][-1].text
         docs = response.get("retrieved_docs") or []
+        blocked_category = response.get("blocked_category") or ""
 
         if span is not None:
             # Same keys as the search span: one evaluator mapping serves both channels.
@@ -89,6 +91,8 @@ def chat(
                 "n_docs": len(docs),
                 "conversation_history": _conversation_history(response.get("messages") or []),
             }
+            if blocked_category:
+                metadata["blocked_category"] = blocked_category
             if docs:
                 top_score = max(float(doc.metadata.get(dm.SCORE, 0.0)) for doc in docs)
                 metadata["retrieved_context"] = format_context(docs)
@@ -110,6 +114,7 @@ def chat(
             "channel": channel,
             "retrieval_used": bool(docs),
             "n_docs": len(docs),
+            "blocked_category": blocked_category,
             "message_chars": len(message),
             "response_chars": len(response_text),
             "duration_ms": round((perf_counter() - started) * 1000),

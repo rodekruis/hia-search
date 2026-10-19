@@ -71,6 +71,13 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def support_contacts():
+    """Route tests stub get_system_prompt; the support contacts come from the same Chat sheet."""
+    with patch("routes.chat.get_support_contacts", return_value={}) as mock:
+        yield mock
+
+
 @pytest.fixture()
 def mock_rag_agent():
     """Return the mocked rag_agent so tests can configure its .invoke()."""

@@ -272,6 +272,39 @@ class TestPromptLoader:
         )
         assert loader.get_prompt() == "Hi"
 
+    @patch("utils.prompt_loader.pd.read_csv")
+    def test_get_values_returns_all_filled_rows(self, mock_read_csv):
+        import pandas as pd
+        from utils.prompt_loader import PromptLoader
+
+        mock_read_csv.return_value = pd.DataFrame(
+            {
+                "#KEY": ["#system-prompt", " #support-emergency ", "#support-gbv", None],
+                "#VALUE": ["Be kind.", " 112 ", None, "junk"],
+            }
+        )
+
+        values = PromptLoader(document_type="googlesheet", document_id="x").get_values()
+        # empty values are left out, so an empty contact counts as missing
+        assert values == {"#system-prompt": "Be kind.", "#support-emergency": "112"}
+
+    @patch("utils.prompt_loader.pd.read_csv")
+    def test_keys_are_matched_by_tag_below_the_label(self, mock_read_csv):
+        """HIA key cells read 'Label\\n#tag', as in the Chat sheet template."""
+        import pandas as pd
+        from utils.prompt_loader import PromptLoader
+
+        mock_read_csv.return_value = pd.DataFrame(
+            {
+                "#KEY": ["Main System Prompt\n#system-prompt", "Emergency number\n#support-emergency"],
+                "#VALUE": ["Be kind.", "112"],
+            }
+        )
+
+        loader = PromptLoader(document_type="googlesheet", document_id="x")
+        assert loader.get_values() == {"#system-prompt": "Be kind.", "#support-emergency": "112"}
+        assert loader.get_prompt() == "Be kind."
+
 
 class TestGetSystemPrompt:
     @pytest.fixture(autouse=True)
@@ -282,14 +315,22 @@ class TestGetSystemPrompt:
         yield
         clear_prompt_cache()
 
+    @staticmethod
+    def _sheet(mock_loader, *values: dict):
+        """Chat sheet rows returned by successive fetches."""
+        mock_loader.return_value.get_values.side_effect = list(values)
+        mock_loader.return_value.get_prompt.side_effect = lambda v: v.get("#system-prompt", "")
+
     @patch("utils.prompt_loader.PromptLoader")
     def test_fetches_once_within_ttl(self, mock_loader):
-        from utils.prompt_loader import get_system_prompt
+        from utils.prompt_loader import get_support_contacts, get_system_prompt
 
-        mock_loader.return_value.get_prompt.return_value = "Be kind."
+        self._sheet(mock_loader, {"#system-prompt": "Be kind.", "#support-emergency": "112"})
 
         assert get_system_prompt("sheetA") == "Be kind."
         assert get_system_prompt("sheetA") == "Be kind."
+        # prompt and contacts come from the same fetch
+        assert get_support_contacts("sheetA") == {"emergency": "112"}
 
         mock_loader.assert_called_once_with(document_type="googlesheet", document_id="sheetA")
 
@@ -297,7 +338,7 @@ class TestGetSystemPrompt:
     def test_cache_is_per_sheet(self, mock_loader):
         from utils.prompt_loader import get_system_prompt
 
-        mock_loader.return_value.get_prompt.side_effect = ["A", "B"]
+        self._sheet(mock_loader, {"#system-prompt": "A"}, {"#system-prompt": "B"})
 
         assert get_system_prompt("sheetA") == "A"
         assert get_system_prompt("sheetB") == "B"
@@ -309,25 +350,77 @@ class TestGetSystemPrompt:
     def test_refetches_after_ttl(self, mock_loader, mock_clock):
         import utils.prompt_loader as pl
 
-        mock_loader.return_value.get_prompt.side_effect = ["old", "new"]
-        mock_clock.side_effect = [0.0, pl.PROMPT_CACHE_TTL_S - 1, pl.PROMPT_CACHE_TTL_S + 1]
+        self._sheet(
+            mock_loader,
+            {"#system-prompt": "old", "#support-emergency": "112"},
+            {"#system-prompt": "new", "#support-emergency": "999"},
+        )
+        mock_clock.side_effect = [
+            0.0, pl.PROMPT_CACHE_TTL_S - 1, pl.PROMPT_CACHE_TTL_S + 1, pl.PROMPT_CACHE_TTL_S + 2
+        ]
 
         assert pl.get_system_prompt("s") == "old"
         assert pl.get_system_prompt("s") == "old"
         assert pl.get_system_prompt("s") == "new"
+        assert pl.get_support_contacts("s") == {"emergency": "999"}
 
     @patch("utils.prompt_loader.PromptLoader")
     def test_falls_back_to_default_file_and_caches_it(self, mock_loader):
         import utils.prompt_loader as pl
 
-        mock_loader.return_value.get_prompt.return_value = ""
+        self._sheet(mock_loader, {})
         expected = pl.DEFAULT_PROMPT_PATH.read_text(encoding="utf-8")
 
         assert pl.get_system_prompt("s") == expected
         assert expected.strip() != ""
         pl.get_system_prompt("s")
+        assert pl.get_support_contacts("s") == {}
         # a sheet without a prompt must not be re-fetched every turn either
         mock_loader.assert_called_once()
+
+    @patch("utils.prompt_loader.PromptLoader")
+    def test_support_contacts_keep_known_needs_only(self, mock_loader):
+        import utils.prompt_loader as pl
+
+        self._sheet(
+            mock_loader,
+            {
+                "#system-prompt": "p",
+                "#support-emergency": "112",
+                "#support-gbv": "0800-2000",
+                "#support-something-else": "x",
+            },
+        )
+
+        assert pl.get_support_contacts("s") == {"emergency": "112", "gbv": "0800-2000"}
+
+    def test_wellbeing_prompt_lists_contacts_after_the_rules(self):
+        import utils.prompt_loader as pl
+
+        wellbeing = pl.get_wellbeing_prompt({"emergency": "112", "talk_to_staff": "+31 70 4455 666"})
+
+        assert wellbeing.startswith("# Wellbeing\n")
+        assert wellbeing.endswith(
+            "# Support contacts\n"
+            "- Emergency services: 112\n"
+            "- Talk to a staff member: +31 70 4455 666"
+        )
+
+    def test_wellbeing_prompt_without_emergency_contact_points_to_local_services(self):
+        import utils.prompt_loader as pl
+
+        contacts = pl.get_wellbeing_prompt({"psychosocial_support": "113"}).split("# Support contacts\n")[1]
+
+        assert contacts.splitlines() == [
+            "- Emergency services: no contact listed; tell them to contact their local emergency services.",
+            "- Psychosocial support: 113",
+        ]
+
+    def test_direct_answer_rules_allow_support_contacts(self):
+        import utils.prompt_loader as pl
+
+        direct = pl.get_direct_answer_prompt()
+        assert "# Wellbeing" in direct and "# Support contacts" in direct
 
     def test_default_prompt_has_the_sections_the_direct_answer_rules_reference(self):
         import utils.prompt_loader as pl
