@@ -10,6 +10,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.documents import Document
+from langchain_core.messages import AIMessage, HumanMessage
 from twilio.request_validator import RequestValidator
 
 from main import app
@@ -52,11 +53,8 @@ def _twilio_headers(path: str, params: dict, form: dict, token: str = TWILIO_TOK
 
 def _make_agent_response(text: str, doc_contents: list[str] | None = None, search_query: str = ""):
     """Build a fake rag_agent.invoke() return value."""
-    ai_msg = MagicMock()
-    ai_msg.type = "ai"
-    ai_msg.content = text
     docs = [Document(page_content=content) for content in doc_contents or []]
-    return {"messages": [ai_msg], "retrieved_docs": docs, "search_query": search_query}
+    return {"messages": [AIMessage(content=text)], "retrieved_docs": docs, "search_query": search_query}
 
 
 # ---------------------------------------------------------------------------
@@ -714,8 +712,15 @@ class TestChatTracing:
         self, mock_get_agent, mock_prompt, mock_vs, client, chat_span
     ):
         span, lf_client, propagate, callbacks = chat_span
-        prior_user, prior_bot = MagicMock(type="human", content="earlier q"), MagicMock(type="ai", content="earlier a")
-        current_user, answer = MagicMock(type="human", content="Де лікар?"), MagicMock(type="ai", content="У сімейного лікаря.")
+        prior_user, prior_bot = HumanMessage("earlier q"), AIMessage("earlier a")
+        current_user = HumanMessage("Де лікар?")
+        # Responses API shape: reasoning + text blocks; only the text is the answer
+        answer = AIMessage(
+            content=[
+                {"type": "reasoning", "id": "rs_1", "summary": []},
+                {"type": "text", "text": "У сімейного лікаря.", "annotations": [], "id": "msg_1"},
+            ]
+        )
         mock_agent = MagicMock()
         mock_agent.invoke.return_value = {
             "messages": [prior_user, prior_bot, current_user, answer],

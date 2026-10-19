@@ -1,7 +1,7 @@
 from __future__ import annotations
 from langchain_core.documents import Document
 from typing_extensions import Annotated, List
-from langchain_openai import AzureChatOpenAI
+from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, MessagesState
 from langchain.messages import SystemMessage, RemoveMessage
 from langchain_core.runnables import RunnableConfig
@@ -33,6 +33,10 @@ _HISTORY_WINDOW = 10
 _DEFAULT_LLM_TIMEOUT_S = 6.0
 _DEFAULT_LLM_MAX_RETRIES = 0
 
+# OpenAI's recommended effort for chat assistants that use tools; "none" is
+# faster, higher efforts are too slow for the Twilio window.
+_DEFAULT_LLM_REASONING_EFFORT = "low"
+
 # Documents (one per Q&A or offer) retrieved per search (RETRIEVAL_K)
 _DEFAULT_RETRIEVAL_K = 10
 
@@ -50,15 +54,32 @@ def format_context(docs: List[Document]) -> str:
     return "\n\n".join(f"[{index}] {doc.page_content}" for index, doc in enumerate(docs, start=1))
 
 
+def _azure_v1_base_url(endpoint: str) -> str:
+    """Azure OpenAI v1 API root (no api-version) for a resource endpoint."""
+    endpoint = endpoint.rstrip("/")
+    if not endpoint.endswith("/openai/v1"):
+        endpoint = f"{endpoint}/openai/v1"
+    return f"{endpoint}/"
+
+
 def _get_llm():
-    """Lazily initialize the LLM client."""
+    """Lazily initialize the LLM client.
+
+    Azure OpenAI v1 API through the plain OpenAI client, on the Responses API:
+    GPT-6 reasoning models only call tools with reasoning there (Chat Completions
+    allows tools only with reasoning effort "none"). No temperature: reasoning
+    models reject sampling parameters. store=False keeps conversations from being
+    stored by the Responses API.
+    """
     global _llm
     if _llm is None:
-        _llm = AzureChatOpenAI(
-            azure_endpoint=os.environ["OPENAI_ENDPOINT"],
-            azure_deployment=os.environ["MODEL_CHAT"],
-            openai_api_version=os.environ["OPENAI_API_VERSION"],
-            temperature=0.2,
+        _llm = ChatOpenAI(
+            base_url=_azure_v1_base_url(os.environ["OPENAI_ENDPOINT"]),
+            api_key=os.environ["OPENAI_API_KEY"],
+            model=os.environ["MODEL_CHAT"],
+            use_responses_api=True,
+            reasoning_effort=os.environ.get("LLM_REASONING_EFFORT", _DEFAULT_LLM_REASONING_EFFORT),
+            store=False,
             timeout=float(os.environ.get("LLM_TIMEOUT_S", _DEFAULT_LLM_TIMEOUT_S)),
             max_retries=int(os.environ.get("LLM_MAX_RETRIES", _DEFAULT_LLM_MAX_RETRIES)),
         )

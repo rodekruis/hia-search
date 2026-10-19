@@ -14,7 +14,7 @@ dependencies = [
   "fastapi",
   "langchain",
   "langchain-community",
-  "langchain-openai",
+  "langchain-openai>=1.7.2",
   "langgraph",
   "langgraph-checkpoint-postgres",
   "orjson",

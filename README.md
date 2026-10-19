@@ -67,7 +67,7 @@ sequenceDiagram
 
 - [Python](https://www.python.org/) 3.12
 - [uv](https://docs.astral.sh/uv/) for dependency management
-- An [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/) deployment (chat + embeddings models)
+- An [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/) deployment (chat + embeddings models). The chat model (e.g. `gpt-6-luna`) is called through the Azure OpenAI [v1 API](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/api-version-lifecycle) (`<OPENAI_ENDPOINT>/openai/v1/`, no `api-version`) on the Responses API, which GPT-6 reasoning models need to call tools while reasoning. It is called without `temperature` (reasoning models reject it), with `LLM_REASONING_EFFORT` (default `low`), and with `store=false` so conversations are not stored by the Responses API. Embeddings still use the classic API with `OPENAI_API_VERSION`.
 - An [Azure AI Search](https://learn.microsoft.com/en-us/azure/search/) service
 - A [PostgreSQL](https://www.postgresql.org/) database (for conversation history)
 - A [Microsoft Cognitive Services](https://learn.microsoft.com/en-us/azure/cognitive-services/translator/) Translator resource (for `/search` and for translating the indexed content to English; chat does not use it)
@@ -229,7 +229,7 @@ Every response carries an `x-request-id` header. Unexpected failures return a st
 * `500 internal_error`: unexpected error; details are only in the server logs.
 * `422 validation_error`: invalid input.
 
-The Twilio webhook never returns these: if a reply cannot be generated, the user receives a short fallback message instead. Twilio only waits 15 seconds for the reply, so each chat-model call is bounded by `LLM_TIMEOUT_S` (default 6 s) and is not retried (`LLM_MAX_RETRIES`, default 0): a turn makes up to two calls, and a stalled or throttled call fails in time for the fallback message to be delivered rather than leaving the user without any reply.
+The Twilio webhook never returns these: if a reply cannot be generated, the user receives a short fallback message instead. Twilio only waits 15 seconds for the reply, so each chat-model call is bounded by `LLM_TIMEOUT_S` (default 6 s) and is not retried (`LLM_MAX_RETRIES`, default 0): a turn makes up to two calls, and a stalled or throttled call fails in time for the fallback message to be delivered rather than leaving the user without any reply. Reasoning adds latency: if replies start hitting the timeout, lower `LLM_REASONING_EFFORT` (e.g. to `none`) before raising `LLM_TIMEOUT_S`.
 
 ### Logging & privacy
 

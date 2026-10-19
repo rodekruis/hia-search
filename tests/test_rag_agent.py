@@ -127,6 +127,38 @@ def test_empty_search_is_explicit_in_the_generate_prompt(vector_store):
     )
 
 
+def test_responses_api_messages_flow_through_the_graph(vector_store):
+    """GPT-6 on the Responses API: content is a list of blocks (reasoning, function_call, text)."""
+    tool_call = AIMessage(
+        content=[
+            {"type": "reasoning", "id": "rs_1", "summary": []},
+            {"type": "function_call", "id": "fc_1", "call_id": "call-1", "name": "retrieve",
+             "arguments": '{"query": "housing"}', "status": "completed"},
+        ],
+        tool_calls=[{"name": "retrieve", "args": {"query": "housing"}, "id": "call-1"}],
+    )
+    answer = AIMessage(
+        content=[
+            {"type": "reasoning", "id": "rs_2", "summary": []},
+            {"type": "text", "text": "You can stay at the shelter.", "annotations": [], "id": "msg_1"},
+        ]
+    )
+    llm = FakeLLM([tool_call, answer, AIMessage(content=[{"type": "text", "text": "hi!"}])])
+    graph = rag_agent.build_graph(MemorySaver())
+
+    with patch.object(rag_agent, "_get_llm", return_value=llm):
+        result = graph.invoke({"messages": [("human", "where can I live?")]}, CONFIG)
+        second = graph.invoke({"messages": [("human", "hello")]}, CONFIG)
+
+    assert result["search_query"] == "housing"
+    assert result["retrieved_docs"] == DOCS
+    assert result["messages"][-1].text == "You can stay at the shelter."
+    # tool-call scaffolding pruned; the next turn sees only the human/AI exchange
+    assert [m.type for m in result["messages"]] == ["human", "ai"]
+    assert [m.type for m in llm.prompts[2][1:]] == ["human", "ai", "human"]
+    assert second["messages"][-1].text == "hi!" and second["retrieved_docs"] == []
+
+
 def test_direct_answer_resets_retrieved_docs(vector_store):
     llm = FakeLLM(
         [
@@ -347,43 +379,83 @@ class TestAgentLifecycle:
         build_graph.assert_not_called()
 
 
-def test_get_llm_uses_azure_env(monkeypatch):
-    llm_cls = MagicMock(name="AzureChatOpenAI")
-    monkeypatch.setattr(rag_agent, "AzureChatOpenAI", llm_cls)
+def test_get_llm_uses_azure_v1_responses_api(monkeypatch):
+    llm_cls = MagicMock(name="ChatOpenAI")
+    monkeypatch.setattr(rag_agent, "ChatOpenAI", llm_cls)
     monkeypatch.setattr(rag_agent, "_llm", None)
-    monkeypatch.setenv("OPENAI_ENDPOINT", "https://oai.example")
-    monkeypatch.setenv("MODEL_CHAT", "gpt-test")
-    monkeypatch.setenv("OPENAI_API_VERSION", "2024-06-01")
-    monkeypatch.delenv("LLM_TIMEOUT_S", raising=False)
-    monkeypatch.delenv("LLM_MAX_RETRIES", raising=False)
+    monkeypatch.setenv("OPENAI_ENDPOINT", "https://oai.example/")
+    monkeypatch.setenv("OPENAI_API_KEY", "key-1")
+    monkeypatch.setenv("MODEL_CHAT", "gpt-6-luna")
+    for name in ("LLM_TIMEOUT_S", "LLM_MAX_RETRIES", "LLM_REASONING_EFFORT"):
+        monkeypatch.delenv(name, raising=False)
 
     first = rag_agent._get_llm()
     second = rag_agent._get_llm()
 
-    # bounded by default so a stalled call fails inside Twilio's 15 s window
+    # v1 API (no api-version), Responses API so tools work with reasoning, no
+    # temperature (rejected by reasoning models), nothing stored server-side,
+    # bounded so a stalled call fails inside Twilio's 15 s window
     llm_cls.assert_called_once_with(
-        azure_endpoint="https://oai.example",
-        azure_deployment="gpt-test",
-        openai_api_version="2024-06-01",
-        temperature=0.2,
+        base_url="https://oai.example/openai/v1/",
+        api_key="key-1",
+        model="gpt-6-luna",
+        use_responses_api=True,
+        reasoning_effort="low",
+        store=False,
         timeout=6.0,
         max_retries=0,
     )
     assert first is second
 
 
-def test_get_llm_timeout_and_retries_are_configurable(monkeypatch):
-    llm_cls = MagicMock(name="AzureChatOpenAI")
-    monkeypatch.setattr(rag_agent, "AzureChatOpenAI", llm_cls)
+def test_get_llm_timeout_retries_and_reasoning_are_configurable(monkeypatch):
+    llm_cls = MagicMock(name="ChatOpenAI")
+    monkeypatch.setattr(rag_agent, "ChatOpenAI", llm_cls)
     monkeypatch.setattr(rag_agent, "_llm", None)
     monkeypatch.setenv("OPENAI_ENDPOINT", "https://oai.example")
-    monkeypatch.setenv("MODEL_CHAT", "gpt-test")
-    monkeypatch.setenv("OPENAI_API_VERSION", "2024-06-01")
+    monkeypatch.setenv("OPENAI_API_KEY", "key-1")
+    monkeypatch.setenv("MODEL_CHAT", "gpt-6-luna")
     monkeypatch.setenv("LLM_TIMEOUT_S", "4.5")
     monkeypatch.setenv("LLM_MAX_RETRIES", "1")
+    monkeypatch.setenv("LLM_REASONING_EFFORT", "none")
 
     rag_agent._get_llm()
 
     kwargs = llm_cls.call_args.kwargs
     assert kwargs["timeout"] == 4.5
     assert kwargs["max_retries"] == 1
+    assert kwargs["reasoning_effort"] == "none"
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://oai.example",
+        "https://oai.example/",
+        "https://oai.example/openai/v1",
+        "https://oai.example/openai/v1/",
+    ],
+)
+def test_azure_v1_base_url(endpoint):
+    assert rag_agent._azure_v1_base_url(endpoint) == "https://oai.example/openai/v1/"
+
+
+def test_real_client_sends_responses_api_payload_without_temperature(monkeypatch):
+    """Offline: build the actual request body the OpenAI client would send."""
+    monkeypatch.setattr(rag_agent, "_llm", None)
+    monkeypatch.setenv("OPENAI_ENDPOINT", "https://oai.example")
+    monkeypatch.setenv("OPENAI_API_KEY", "key-1")
+    monkeypatch.setenv("MODEL_CHAT", "gpt-6-luna")
+    for name in ("LLM_TIMEOUT_S", "LLM_MAX_RETRIES", "LLM_REASONING_EFFORT"):
+        monkeypatch.delenv(name, raising=False)
+    from langchain_core.messages import HumanMessage
+
+    llm = rag_agent._get_llm()
+    payload = llm._get_request_payload([HumanMessage("hi")])
+
+    assert str(llm.root_client.base_url) == "https://oai.example/openai/v1/"
+    assert payload["model"] == "gpt-6-luna"
+    assert payload["reasoning"] == {"effort": "low"}
+    assert payload["store"] is False
+    assert "input" in payload and "messages" not in payload  # Responses API
+    assert "temperature" not in payload

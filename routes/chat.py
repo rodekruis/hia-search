@@ -28,7 +28,7 @@ def _conversation_history(messages: list) -> str:
     """Prior turns as a plain transcript; the current turn is the span's input/output."""
     turns = [m for m in messages if getattr(m, "type", None) in ("human", "ai")]
     role = {"human": "user", "ai": "assistant"}
-    return "\n".join(f"{role[m.type]}: {m.content}" for m in turns[:-2])
+    return "\n".join(f"{role[m.type]}: {m.text}" for m in turns[:-2])
 
 
 def chat(
@@ -76,7 +76,9 @@ def chat(
                 },
             },
         )
-        response_text = response["messages"][-1].content
+        # .text, not .content: Responses API messages hold a list of blocks
+        # (reasoning, text), so .content is not the answer string
+        response_text = response["messages"][-1].text
         docs = response.get("retrieved_docs") or []
 
         if span is not None:
