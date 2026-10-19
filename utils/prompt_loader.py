@@ -153,7 +153,7 @@ class PromptLoader:
         try:
             df = df.dropna(subset=["#KEY"])
             return {
-                str(key).strip(): str(value).strip()
+                _tag(key): str(value).strip()
                 for key, value in zip(df["#KEY"], df["#VALUE"])
                 if not pd.isna(value) and str(value).strip()
             }
@@ -164,5 +164,10 @@ class PromptLoader:
         """The `#system-prompt` value, "" when there is none."""
         if values is None:
             values = self.get_values()
-        # the key cell may carry extra text, e.g. "#system-prompt (instructions)"
-        return next((v for k, v in values.items() if "#system-prompt" in k), "")
+        return values.get("#system-prompt", "")
+
+
+def _tag(key: object) -> str:
+    """`Main System Prompt\\n#system-prompt` -> `#system-prompt`: HIA key cells put a label before the tag."""
+    tags = [part for part in str(key).split() if part.startswith("#")]
+    return tags[-1] if tags else str(key).strip()

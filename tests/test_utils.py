@@ -288,6 +288,23 @@ class TestPromptLoader:
         # empty values are left out, so an empty contact counts as missing
         assert values == {"#system-prompt": "Be kind.", "#support-emergency": "112"}
 
+    @patch("utils.prompt_loader.pd.read_csv")
+    def test_keys_are_matched_by_tag_below_the_label(self, mock_read_csv):
+        """HIA key cells read 'Label\\n#tag', as in the Chat sheet template."""
+        import pandas as pd
+        from utils.prompt_loader import PromptLoader
+
+        mock_read_csv.return_value = pd.DataFrame(
+            {
+                "#KEY": ["Main System Prompt\n#system-prompt", "Emergency number\n#support-emergency"],
+                "#VALUE": ["Be kind.", "112"],
+            }
+        )
+
+        loader = PromptLoader(document_type="googlesheet", document_id="x")
+        assert loader.get_values() == {"#system-prompt": "Be kind.", "#support-emergency": "112"}
+        assert loader.get_prompt() == "Be kind."
+
 
 class TestGetSystemPrompt:
     @pytest.fixture(autouse=True)
