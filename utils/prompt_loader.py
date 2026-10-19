@@ -1,3 +1,4 @@
+import functools
 import logging
 import os
 import time
@@ -10,6 +11,7 @@ from fastapi import HTTPException
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROMPT_PATH = Path(__file__).resolve().parent.parent / "config" / "rag_agent_prompt.txt"
+DIRECT_ANSWER_PROMPT_PATH = Path(__file__).resolve().parent.parent / "config" / "direct_answer_prompt.txt"
 
 # Cache the system prompt to reduce latency.
 PROMPT_CACHE_TTL_S = float(os.environ.get("PROMPT_CACHE_TTL_S", "300"))
@@ -32,6 +34,12 @@ def get_system_prompt(google_sheet_id: str) -> str:
 
 def clear_prompt_cache() -> None:
     _prompt_cache.clear()
+
+
+@functools.cache
+def get_direct_answer_prompt() -> str:
+    """Instance-agnostic rules for turns answered without retrieval (greetings, small talk, off-topic)."""
+    return DIRECT_ANSWER_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 class PromptLoader:

@@ -87,6 +87,8 @@ See [`example.env`](./example.env) for all required environment variables.
 
 >[!NOTE]
 >The instructions that the chatbot will follow are by default [these ones](config/rag_agent_prompt.txt). If you want to customize them, create a new sheet named `Chat` in your HIA Google Sheet file following [this template](https://docs.google.com/spreadsheets/d/1op6Ouyxtwv4f8GAEAMSn5PVzcXtfZuftMiLYWsX0pbs/edit?pli=1&gid=1707339525#gid=1707339525), then insert the desired instructions under `#VALUE`, cell `B2`. Make sure to follow [best practices in prompt engineering](https://www.promptingguide.ai/introduction/tips); if it's the first time you do this, make sure the CEA Data Specialist reviews what you wrote. Prompt changes take effect within 5 minutes (`PROMPT_CACHE_TTL_S`), without a redeploy.
+>
+>Keep the section structure of the default prompt: `# Role`, `# Scope`, `# Answering` (rules for answering from the retrieved documents, e.g. the reply when nothing relevant is found) and `# Conversation`. When the chatbot replies without searching (greetings, thanks, small talk, off-topic requests), [these instance-agnostic rules](config/direct_answer_prompt.txt) are appended to the prompt: they tell the model to follow `# Role`, `# Scope` and `# Conversation` but ignore `# Answering`, so a greeting gets a greeting back instead of the "no information" reply.
 
 ### 2. Set up the search service
   - Find the item called `HIA Search API-key(s) [production]` in Bitwarden and copy the value of `API_KEY`

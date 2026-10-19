@@ -85,9 +85,12 @@ def test_retrieval_turn_keeps_docs_in_state_and_prunes_scaffolding(vector_store)
     assert [m.type for m in result["messages"]] == ["human", "ai"]
 
     # system prompt from config; docs injected into the generate prompt
-    assert llm.prompts[0][0].content == "You are HIA."
+    direct_rules = rag_agent.get_direct_answer_prompt()
+    assert llm.prompts[0][0].content == f"You are HIA.\n\n{direct_rules}"
     assert "doc A" in llm.prompts[1][0].content and "doc B" in llm.prompts[1][0].content
     assert llm.prompts[1][0].content.startswith("You are HIA.")
+    # direct-answer rules would tell the grounded answer to ignore # Answering
+    assert direct_rules not in llm.prompts[1][0].content
 
 
 def test_direct_answer_resets_retrieved_docs(vector_store):

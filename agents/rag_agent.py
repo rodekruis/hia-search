@@ -13,6 +13,7 @@ from psycopg_pool import ConnectionPool
 import os
 from urllib.parse import quote
 from utils.vector_store import get_vector_store
+from utils.prompt_loader import get_direct_answer_prompt
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -91,7 +92,10 @@ def retrieve(
 def query_or_respond(state: RagState, config: RunnableConfig) -> dict:
     """Generate tool call for retrieval or respond."""
     llm_with_tools = _get_llm().bind_tools([retrieve])
-    prompt = [SystemMessage(_system_prompt(config))] + _conversation(state)
+    # This call answers directly when it skips retrieval, so it also gets the
+    # direct-answer rules; generate() must not, as it answers from documents.
+    system_prompt = f"{_system_prompt(config)}\n\n{get_direct_answer_prompt()}"
+    prompt = [SystemMessage(system_prompt)] + _conversation(state)
     response = llm_with_tools.invoke(prompt, config=_llm_config(config))
 
     # MessagesState appends messages to state instead of overwriting;

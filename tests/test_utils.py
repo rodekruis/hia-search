@@ -329,6 +329,16 @@ class TestGetSystemPrompt:
         # a sheet without a prompt must not be re-fetched every turn either
         mock_loader.assert_called_once()
 
+    def test_default_prompt_has_the_sections_the_direct_answer_rules_reference(self):
+        import utils.prompt_loader as pl
+
+        default = pl.DEFAULT_PROMPT_PATH.read_text(encoding="utf-8")
+        direct = pl.get_direct_answer_prompt()
+
+        for section in ("# Role", "# Scope", "# Answering", "# Conversation"):
+            assert f"{section}\n" in default.replace("\r\n", "\n")
+            assert section in direct
+
 
 # ---------------------------------------------------------------------------
 # auth.py
