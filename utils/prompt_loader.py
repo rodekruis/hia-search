@@ -129,7 +129,10 @@ class PromptLoader:
         """All `#KEY` -> `#VALUE` rows of the Chat sheet (empty when it is missing or malformed)."""
         if self.document_type.lower() == "googlesheet":
             sheet_name = "Chat"
-            url = f"https://docs.google.com/spreadsheets/d/{self.document_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
+            # headers=1: without it, gviz guesses the header size and can merge the first
+            # data row into the header (`#KEY Main System Prompt #system-prompt`), which
+            # hides the #KEY/#VALUE columns and silently drops every setting.
+            url = f"https://docs.google.com/spreadsheets/d/{self.document_id}/gviz/tq?tqx=out:csv&headers=1&sheet={sheet_name}"
             try:
                 df = pd.read_csv(url)
             except urllib.error.HTTPError as e:
@@ -158,6 +161,12 @@ class PromptLoader:
                 if not pd.isna(value) and str(value).strip()
             }
         except KeyError:
+            logger.warning(
+                "Chat sheet of %s has no #KEY/#VALUE columns (found %s): "
+                "ignoring its system prompt and support contacts",
+                self.document_id,
+                [str(c)[:40] for c in df.columns],
+            )
             return {}
 
     def get_prompt(self, values: dict[str, str] | None = None) -> str:
