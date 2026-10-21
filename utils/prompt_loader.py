@@ -129,9 +129,6 @@ class PromptLoader:
         """All `#KEY` -> `#VALUE` rows of the Chat sheet (empty when it is missing or malformed)."""
         if self.document_type.lower() == "googlesheet":
             sheet_name = "Chat"
-            # headers=1: without it, gviz guesses the header size and can merge the first
-            # data row into the header (`#KEY Main System Prompt #system-prompt`), which
-            # hides the #KEY/#VALUE columns and silently drops every setting.
             url = f"https://docs.google.com/spreadsheets/d/{self.document_id}/gviz/tq?tqx=out:csv&headers=1&sheet={sheet_name}"
             try:
                 df = pd.read_csv(url)
