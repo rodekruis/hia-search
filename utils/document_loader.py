@@ -164,23 +164,23 @@ class DocumentLoader:
         # combine fields into column text
         def combine_fields(row):
             text = row[dm.NAME] + ". "
-            if ~pd.isna(row[dm.DESCRIPTION]) and str(row[dm.DESCRIPTION]).strip() != "" and str(row[dm.DESCRIPTION]) != "nan":
+            if not pd.isna(row[dm.DESCRIPTION]) and str(row[dm.DESCRIPTION]).strip() != "" and str(row[dm.DESCRIPTION]) != "nan":
                 text = text + "Description: " + str(row[dm.DESCRIPTION]) + " "
-            if ~pd.isna(row[dm.PHONENUMBERS]) and str(row[dm.PHONENUMBERS]).strip() != "" and str(row[dm.PHONENUMBERS]) != "nan":
+            if not pd.isna(row[dm.PHONENUMBERS]) and str(row[dm.PHONENUMBERS]).strip() != "" and str(row[dm.PHONENUMBERS]) != "nan":
                 text = text + "Phone Number: " + str(row[dm.PHONENUMBERS]) + ". "
-            if ~pd.isna(row[dm.EMAILS]) and str(row[dm.EMAILS]).strip() != "" and str(row[dm.EMAILS]) != "nan":
+            if not pd.isna(row[dm.EMAILS]) and str(row[dm.EMAILS]).strip() != "" and str(row[dm.EMAILS]) != "nan":
                 text = text + "Email: " + str(row[dm.EMAILS]) + ". "
-            if ~pd.isna(row[dm.WEBURLS]) and str(row[dm.WEBURLS]).strip() != "" and str(row[dm.WEBURLS]) != "nan":
+            if not pd.isna(row[dm.WEBURLS]) and str(row[dm.WEBURLS]).strip() != "" and str(row[dm.WEBURLS]) != "nan":
                 text = text + "Link to Website: " + str(row[dm.WEBURLS]) + " "
-            if ~pd.isna(row[dm.ADDRESS]) and str(row[dm.ADDRESS]).strip() != "" and str(row[dm.ADDRESS]) != "nan":
+            if not pd.isna(row[dm.ADDRESS]) and str(row[dm.ADDRESS]).strip() != "" and str(row[dm.ADDRESS]) != "nan":
                 text = text + "Address: " + str(row[dm.ADDRESS]) + ". "
-            if ~pd.isna(row[dm.OPENWEEK]) and str(row[dm.OPENWEEK]).strip() != "" and str(row[dm.OPENWEEK]) != "nan":
+            if not pd.isna(row[dm.OPENWEEK]) and str(row[dm.OPENWEEK]).strip() != "" and str(row[dm.OPENWEEK]) != "nan":
                 text = text + "Opening Hours: " + str(row[dm.OPENWEEK]) + ". "
-            if ~pd.isna(row[dm.OPENWEEKEND]) and str(row[dm.OPENWEEKEND]).strip() != "" and str(row[dm.OPENWEEKEND]) != "nan":
+            if not pd.isna(row[dm.OPENWEEKEND]) and str(row[dm.OPENWEEKEND]).strip() != "" and str(row[dm.OPENWEEKEND]) != "nan":
                 text = text + "Opening Hours on Weekends: " + str(row[dm.OPENWEEKEND]) + ". "
-            if ~pd.isna(row[dm.NEEDTOKNOW]) and str(row[dm.NEEDTOKNOW]).strip() != "" and str(row[dm.NEEDTOKNOW]) != "nan":
+            if not pd.isna(row[dm.NEEDTOKNOW]) and str(row[dm.NEEDTOKNOW]).strip() != "" and str(row[dm.NEEDTOKNOW]) != "nan":
                 text = text + "What you need to know: " + str(row[dm.NEEDTOKNOW]) + " "
-            if ~pd.isna(row[dm.MOREINFO]) and str(row[dm.MOREINFO]).strip() != "" and str(row[dm.MOREINFO]) != "nan":
+            if not pd.isna(row[dm.MOREINFO]) and str(row[dm.MOREINFO]).strip() != "" and str(row[dm.MOREINFO]) != "nan":
                 text = text + "Further information: " + str(row[dm.MOREINFO])
             return text
 
