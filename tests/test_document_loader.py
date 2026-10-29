@@ -142,6 +142,24 @@ class TestCleanOffersSheet:
         assert df.iloc[0]["google_index"] == "Offers0"
         assert df.iloc[0]["source"] == "Offers"
 
+    def test_omits_nullable_optional_fields(self):
+        nullable_fields = [
+            "#DESCRIPTION",
+            "#PHONENUMBERS",
+            "#EMAILS",
+            "#WEBURLS",
+            "#ADDRESS",
+            "#OPENWEEK",
+            "#OPENWEEKEND",
+            "#NEEDTOKNOW",
+            "#MOREINFO",
+        ]
+        df = self.loader._clean_Offers_sheet(
+            _offers_sheet([{field: pd.NA for field in nullable_fields}])
+        )
+
+        assert df.iloc[0]["text"] == "Shelter. "
+
     def test_all_optional_fields_rendered(self):
         df = self.loader._clean_Offers_sheet(
             _offers_sheet(
