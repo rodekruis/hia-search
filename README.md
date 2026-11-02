@@ -92,7 +92,7 @@ See [`example.env`](./example.env) for all required environment variables.
 People who write to the chatbot can be upset, frightened or at risk. [Wellbeing rules](config/wellbeing_prompt.txt), inspired by [Psychological First Aid (PFA)](https://mhpsshub.org/resource/a-guide-to-psychological-first-aid-for-red-cross-red-crescent-societies/), are appended to every prompt (also when the `Chat` sheet has its own prompt): the chatbot is instructed to acknowledge distress, put safety first and give the right support contact. These contacts are set per instance in the `Chat` sheet, one row each, with the key under `#KEY` and one contact (preferably a phone number) under `#VALUE`:
 
 | `#KEY` | Contact for |
-|---|---|
+| --- | --- |
 | `#support-emergency` | Emergency services (e.g. `112` in the Netherlands) |
 | `#support-psychosocial_support` | Psychosocial support |
 | `#support-talk_to_staff` | Talking to a staff member of the National Society |
@@ -102,11 +102,12 @@ People who write to the chatbot can be upset, frightened or at risk. [Wellbeing 
 Leave a row out (or its value empty) if there is no such service. Without `#support-emergency`, the chatbot tells people to contact their local emergency services; the fixed replies to messages blocked by the content filter do the same. The chatbot gives these contacts as written and never invents others. Like the prompt, changes take effect within 5 minutes.
 
 ### 2. Set up the search service
-  - Find the item called `HIA Search API-key(s) [production]` in Bitwarden and copy the value of `API_KEY`
-  - Go to the HIA repository's "**Settings**" > "**Secret and variables**" > "**Actions**" > "**New repository secret**"
-  - Name the secret: `SEARCH_API_KEY`and insert the API Key as value
-  - In the HIA repository, go to the file: `.github/workflows/deploy-github-pages.yml` and click "**Edit this file**" (pencil icon)
-  - Under `jobs` > `deploy` > `steps` > `Build` > `env` add the two variables `SEARCH_API` and `SEARCH_API_KEY` as follows
+
+- Find the item called `HIA Search API-key(s) [production]` in Bitwarden and copy the value of `API_KEY`
+- Go to the HIA repository's "**Settings**" > "**Secret and variables**" > "**Actions**" > "**New repository secret**"
+- Name the secret: `SEARCH_API_KEY`and insert the API Key as value
+- In the HIA repository, go to the file: `.github/workflows/deploy-github-pages.yml` and click "**Edit this file**" (pencil icon)
+- Under `jobs` > `deploy` > `steps` > `Build` > `env` add the two variables `SEARCH_API` and `SEARCH_API_KEY` as follows
 
   ```yaml
         - name: Build
@@ -121,25 +122,30 @@ Leave a row out (or its value empty) if there is no such service. Without `#supp
           SEARCH_API: 'https://hia-search.azurewebsites.net/search'
           SEARCH_API_KEY: ${{ secrets.SEARCH_API_KEY }}
   ```
-  - Redeploy HIA by triggering the deployment workflow: `Actions` > `Deploy to GitHub Pages` > `Run workflow`
-  
+
+- Redeploy HIA by triggering the deployment workflow: `Actions` > `Deploy to GitHub Pages` > `Run workflow`
 
 ### 3. Set up the chat service
 
 The chat service is based on [Twilio incoming Messaging Webhooks](https://www.twilio.com/docs/usage/webhooks/messaging-webhooks#incoming-message-webhook). You need an active Twilio account and an active phone or WhatsApp number, see [how to buy one](https://help.twilio.com/articles/223135247-How-to-Search-for-and-Buy-a-Twilio-Phone-Number-from-Console).
 
 Select the active number in Twilio and [configure the webhook](https://www.twilio.com/docs/messaging/tutorials/how-to-receive-and-reply/python#configure-your-webhook-url) using the `/chat-twilio-webhook` endpoint, with a `googleSheetId` as query parameter. Example:
-```
+
+```url
 https://hia-search.azurewebsites.net/chat-twilio-webhook?googleSheetId=14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04
 ```
+
 The answer will be sent via message directly to the user. The phone number of the user will be used as thread ID, for the chat model to remember the conversation.
 
 The endpoint only accepts requests signed by Twilio, so the service needs the **Auth Token** of the Twilio account that owns the number. To get it:
+
 1. On the account dashboard (`Account Info` panel at the bottom of the home page) you will find `Account SID` and `Auth Token`. Click the eye icon to reveal the Auth Token and copy it. It is also available under `Account` > `API keys & tokens` > `Auth Tokens`.
 2. Add it to the environment of the deployed service, mapped to the `googleSheetId` used in the webhook URL:
-   ```
+
+   ```env
    TWILIO_AUTH_TOKENS={"14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04": "<your Twilio Auth Token>"}
    ```
+
    If you serve multiple HIA instances from different Twilio accounts, add one entry per `googleSheetId`. See [`/chat-twilio-webhook`](#chat-twilio-webhook) for details.
 
 >[!WARNING]
@@ -169,10 +175,11 @@ If the Q&A sheet is not publicly accessible, you can pass its content under the 
 ### `/search`
 
 The `/search` endpoint accepts four parameters:
-* `query`: the search query
-* `googleSheetId`: the Google Sheet ID
-* `lang`: the language of the search query; results will be translated to this language
-* `k`: the number of results to return
+
+- `query`: the search query
+- `googleSheetId`: the Google Sheet ID
+- `lang`: the language of the search query; results will be translated to this language
+- `k`: the number of results to return
 
 and returns a list of relevant questions and answers, in this format:
 
@@ -205,10 +212,11 @@ and returns a list of relevant questions and answers, in this format:
 ### `/chat-dummy`
 
 The `/chat-dummy` endpoint is a test/development chat endpoint that accepts:
-* `message` (body): the user message
-* `googleSheetId` (query, optional): the Google Sheet ID (defaults to a test sheet)
-* `threadId` (query, optional): a conversation thread ID (max 200 chars); if omitted, a new random one is generated. The response includes the `threadId` used, so pass it back to continue the same conversation
-* `include_context` (query, optional): when `true`, the response includes the retrieved context documents
+
+- `message` (body): the user message
+- `googleSheetId` (query, optional): the Google Sheet ID (defaults to a test sheet)
+- `threadId` (query, optional): a conversation thread ID (max 200 chars); if omitted, a new random one is generated. The response includes the `threadId` used, so pass it back to continue the same conversation
+- `include_context` (query, optional): when `true`, the response includes the retrieved context documents
 
 It returns the chatbot's response as JSON. Protected with `API_KEY`.
 
@@ -217,8 +225,9 @@ It returns the chatbot's response as JSON. Protected with `API_KEY`.
 The `/chat-twilio-webhook` endpoint receives incoming messages from Twilio and responds via SMS/WhatsApp. See [Set up the chat service](#3-set-up-the-chat-service) for configuration.
 
 🔐 This endpoint only accepts requests signed by Twilio: the `X-Twilio-Signature` header is validated against the Auth Token of the Twilio account bound to the `googleSheetId` in the URL (see [Set up the chat service](#3-set-up-the-chat-service) for where to find it). Configure either:
-* `TWILIO_AUTH_TOKENS`: a JSON object mapping each `googleSheetId` to its Twilio Auth Token, e.g. `{"14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04": "abc123"}`. Instances without an entry are rejected.
-* `TWILIO_AUTH_TOKEN`: a single Auth Token used for all instances (only when `TWILIO_AUTH_TOKENS` is not set).
+
+- `TWILIO_AUTH_TOKENS`: a JSON object mapping each `googleSheetId` to its Twilio Auth Token, e.g. `{"14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04": "abc123"}`. Instances without an entry are rejected.
+- `TWILIO_AUTH_TOKEN`: a single Auth Token used for all instances (only when `TWILIO_AUTH_TOKENS` is not set).
 
 Requests without a valid signature are rejected with 401.
 
@@ -236,9 +245,9 @@ Every response carries an `x-request-id` header. Unexpected failures return a st
 {"error": {"code": "external_service_error", "message": "An upstream service failed; please retry later", "request_id": "req_..."}}
 ```
 
-* `502 external_service_error`: Azure OpenAI, Azure AI Search or the checkpoint database failed.
-* `500 internal_error`: unexpected error; details are only in the server logs.
-* `422 validation_error`: invalid input.
+- `502 external_service_error`: Azure OpenAI, Azure AI Search or the checkpoint database failed.
+- `500 internal_error`: unexpected error; details are only in the server logs.
+- `422 validation_error`: invalid input.
 
 The Twilio webhook never returns these: if a reply cannot be generated, the user receives a short fallback message instead (in English, `FALLBACK_MESSAGE` in `routes/chat.py`). Twilio only waits 15 seconds for the reply, so each chat-model call is bounded by `LLM_TIMEOUT_S` (default 6 s) and is not retried (`LLM_MAX_RETRIES`, default 0): a turn makes up to two calls, and a stalled or throttled call fails in time for the fallback message to be delivered rather than leaving the user without any reply. Reasoning adds latency: if replies start hitting the timeout, lower `LLM_REASONING_EFFORT` (e.g. to `none`) before raising `LLM_TIMEOUT_S`.
 
@@ -248,11 +257,11 @@ Application logs (Azure Application Insights) contain **metadata only**: sheet i
 
 ### Application Insights (infrastructure telemetry)
 
-Set `APPLICATIONINSIGHTS_CONNECTION_STRING` to export via the [Azure Monitor OpenTelemetry distro](https://learn.microsoft.com/azure/azure-monitor/app/opentelemetry-enable?tabs=python) (unset = console logging only). Besides logs you get, with no code in the handlers:
+Set `APPLICATIONINSIGHTS_CONNECTION_STRING` to export via the [Azure Monitor OpenTelemetry Distro](https://learn.microsoft.com/azure/azure-monitor/app/opentelemetry-enable?tabs=python) (unset = console logging only). Besides logs you get, with no code in the handlers:
 
-* `requests`: one row per HTTP request (route, status, duration), `/health` excluded.
-* `dependencies`: one row per outbound call — Azure OpenAI, Azure AI Search, the Postgres checkpoint store, Cognitive Services, Google Sheets — so a slow turn can be broken down per stage.
-* `exceptions`, and log↔request correlation via `operation_Id`.
+- `requests`: one row per HTTP request (route, status, duration), `/health` excluded.
+- `dependencies`: one row per outbound call — Azure OpenAI, Azure AI Search, the Postgres checkpoint store, Cognitive Services, Google Sheets — so a slow turn can be broken down per stage.
+- `exceptions`, and log↔request correlation via `operation_Id`.
 
 Requests and dependencies carry the `environment` custom dimension as well; the resource is `service.name = hia-search`.
 
@@ -269,31 +278,31 @@ Search and chat are traced into **two separate Langfuse projects** (distinct key
 
 Each `/search` request is one root span named `search`, tagged `sheet:<googleSheetId>`, `channel:search`, `lang:<lang>`:
 
-* `input`: the query as used for retrieval (English)
-* `output`: the retrieved Q&As as a numbered `[n] Q: … A: …` block
-* `metadata.search_query`, `metadata.retrieved_context`: same content, under the keys the chat traces use, so one evaluator mapping serves both channels
-* `metadata.original_query`, `lang`, `k`, `n_results`, `top_score`
-* scores `top_score` (numeric), `n_results` (numeric), `zero_results` (boolean), written by the app
+- `input`: the query as used for retrieval (English)
+- `output`: the retrieved Q&As as a numbered `[n] Q: … A: …` block
+- `metadata.search_query`, `metadata.retrieved_context`: same content, under the keys the chat traces use, so one evaluator mapping serves both channels
+- `metadata.original_query`, `lang`, `k`, `n_results`, `top_score`
+- scores `top_score` (numeric), `n_results` (numeric), `zero_results` (boolean), written by the app
 
 #### Chat
 
 Each chat turn (`/chat-dummy`, `/chat-twilio-webhook`) is one root span named `chat-turn`, with `session_id` = `user_id` = the thread id (hashed sender on Twilio), tagged `sheet:<googleSheetId>`, `channel:twilio|dummy`. The LangGraph steps (`query_or_respond`, `tools`, `generate`) nest underneath with model, tokens and cost.
 
-* `input`: the user's message verbatim, in their language; `output`: the reply as sent to the user, written by the model in the user's language (no machine translation)
-* `metadata.retrieval_used`, `n_docs`
-* `metadata.retrieved_context` (the documents exactly as fed to the model, numbered `[1] …`, `[2] …` in rank order) and `metadata.search_query` (the query the model wrote for retrieval), present only when `retrieval_used` is true
-* `metadata.top_score` and score `top_score` (numeric): best similarity score among the retrieved documents, present only when `retrieval_used` is true
-* `metadata.conversation_history`: prior turns as a plain transcript, current turn excluded
+- `input`: the user's message verbatim, in their language; `output`: the reply as sent to the user, written by the model in the user's language (no machine translation)
+- `metadata.retrieval_used`, `n_docs`
+- `metadata.retrieved_context` (the documents exactly as fed to the model, numbered `[1] …`, `[2] …` in rank order) and `metadata.search_query` (the query the model wrote for retrieval), present only when `retrieval_used` is true
+- `metadata.top_score` and score `top_score` (numeric): best similarity score among the retrieved documents, present only when `retrieval_used` is true
+- `metadata.conversation_history`: prior turns as a plain transcript, current turn excluded
 
 `/chat-dummy` returns `traceId`; `POST /feedback` `{"traceId": ..., "positive": true|false, "comment": ...}` (read key) records it as a `user-feedback` score (1/0) on that trace. It returns 503 when chat tracing is disabled.
 
 #### Evaluators
 
-Configure **observation-level** evaluators (filter *Is Root Observation*; trace-level evaluators are deprecated):
+Configure **observation-level** evaluators (filter _Is Root Observation_); trace-level evaluators are deprecated):
 
-* Retrieval quality / missing content, both projects: `{{query}}` → Metadata `$.search_query`, `{{context}}` → Metadata `$.retrieved_context`. On chat, filter `metadata.retrieval_used = true` so small talk is skipped. Use rule filters (`top_score` below a threshold, on both projects, or `zero_results = true` on search, plus a small random sample) to run LLM judges only where it pays; a boolean "is the question answered by any of these documents?" judge yields the missing-content list per sheet.
-* Faithfulness on chat: `{{answer}}` → Output, `{{context}}` → Metadata `$.retrieved_context`, `{{question}}` → Metadata `$.search_query`. The answer is in the user's language and the context in English, so tell the judge to compare across languages.
-* User-facing judges (e.g. distress detection) on chat: `{{history}}` → Metadata `$.conversation_history`, `{{message}}` → Input.
+- Retrieval quality / missing content, both projects: `{{query}}` → Metadata `$.search_query`, `{{context}}` → Metadata `$.retrieved_context`. On chat, filter `metadata.retrieval_used = true` so small talk is skipped. Use rule filters (`top_score` below a threshold, on both projects, or `zero_results = true` on search, plus a small random sample) to run LLM judges only where it pays; a boolean "is the question answered by any of these documents?" judge yields the missing-content list per sheet.
+- Faithfulness on chat: `{{answer}}` → Output, `{{context}}` → Metadata `$.retrieved_context`, `{{question}}` → Metadata `$.search_query`. The answer is in the user's language and the context in English, so tell the judge to compare across languages.
+- User-facing judges (e.g. distress detection) on chat: `{{history}}` → Metadata `$.conversation_history`, `{{message}}` → Input.
 
 ## Configuration
 
@@ -303,7 +312,7 @@ cp example.env .env
 
 Edit the provided [ENV-variables](./example.env) accordingly.
 
-#### Chat tuning
+### Chat tuning
 
 Optional; the defaults suit WhatsApp via Twilio, which waits at most 15 seconds for a reply.
 
@@ -339,7 +348,7 @@ docker build -t hia-search .
 docker run -p 8000:8000 --env-file .env hia-search
 ```
 
-The image runs gunicorn with `WEB_CONCURRENCY` Uvicorn workers (default 2). Each worker opens its own Postgres connection pool (up to 20 connections) for conversation history, so keep `WEB_CONCURRENCY × 20` below the database's `max_connections` before raising it. All workers share the conversation history through Postgres, so any worker can serve any turn.
+The image runs `gunicorn` with `WEB_CONCURRENCY` `Uvicorn` workers (default 2). Each worker opens its own Postgres connection pool (up to 20 connections) for conversation history, so keep `WEB_CONCURRENCY × 20` below the database's `max_connections` before raising it. All workers share the conversation history through Postgres, so any worker can serve any turn.
 
 ### AI Disclaimer
 
