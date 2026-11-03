@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,6 +19,10 @@ _ENV_DEFAULTS = {
     "CHECKPOINT_DB_USER": "user",
     "CHECKPOINT_DB_PASSWORD": "pass",
     "CHECKPOINT_DB_HOST": "localhost",
+    "SUBSCRIPTION_DB_HOST": "unused.invalid",
+    "SUBSCRIPTION_DB_NAME": "unused_test",
+    "SUBSCRIPTION_DB_USER": "unused_test",
+    "SUBSCRIPTION_DB_PASSWORD": "unused-test-only",
     "OPENAI_API_TYPE": "azure",
     "OPENAI_ENDPOINT": "https://fake-openai.openai.azure.com/",
     "OPENAI_API_KEY": "fake-key",
@@ -38,6 +43,10 @@ _ENV_DEFAULTS = {
 }
 
 # Force-set so values injected by the shell/.env never leak into tests
+# Never inherit subscription credentials from the shell or a developer's .env.
+for _name in tuple(os.environ):
+    if _name.startswith("SUBSCRIPTION_DB_"):
+        del os.environ[_name]
 os.environ.update(_ENV_DEFAULTS)
 
 # ---------------------------------------------------------------------------
@@ -61,14 +70,24 @@ sys.modules.setdefault(
 # ---------------------------------------------------------------------------
 # Now it's safe to import the FastAPI app
 # ---------------------------------------------------------------------------
-from main import app  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient
+
+from main import app
 
 
 @pytest.fixture()
 def client():
     """FastAPI TestClient with mocked externals."""
-    return TestClient(app)
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture(autouse=True)
+def isolate_subscription_store(monkeypatch):
+    """Existing regression tests must never open a subscription database."""
+    monkeypatch.setattr(
+        app.state, "subscription_store_factory", lambda: nullcontext(MagicMock())
+    )
 
 
 @pytest.fixture(autouse=True)

@@ -70,11 +70,36 @@ sequenceDiagram
 - An [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/) deployment (chat + embeddings models). The chat model (e.g. `gpt-6-luna`) is called through the Azure OpenAI [v1 API](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/api-version-lifecycle) (`<OPENAI_ENDPOINT>/openai/v1/`, no `api-version`) on the Responses API, which GPT-6 reasoning models need to call tools while reasoning. It is called without `temperature` (reasoning models reject it), with `LLM_REASONING_EFFORT` (default `low`), and with `store=false` so conversations are not stored by the Responses API. Embeddings still use the classic API with `OPENAI_API_VERSION`.
 - An [Azure AI Search](https://learn.microsoft.com/en-us/azure/search/) service
 - A [PostgreSQL](https://www.postgresql.org/) database (for conversation history)
+- A separate PostgreSQL server and database for subscriptions (never reuse the conversation database)
 - A [Microsoft Cognitive Services](https://learn.microsoft.com/en-us/azure/cognitive-services/translator/) Translator resource (for `/search` and for translating the indexed content to English; chat does not use it)
 - (Optional) A [Twilio](https://www.twilio.com/) account with an active phone/WhatsApp number
 - (Optional) An [Azure Application Insights](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview) resource for monitoring
 
 See [`example.env`](./example.env) for all required environment variables.
+
+### Subscription storage
+
+Subscription persistence uses the dedicated `SUBSCRIPTION_DB_*` settings in `example.env`.
+Provision a separate PostgreSQL database and credentials for these tables; subscription storage
+does not share the conversation/checkpoint database. Before starting API workers, apply the
+versioned migrations with:
+
+```bash
+uv sync
+uv run python -m subscriptions.migrate
+```
+
+Each API worker then opens its own bounded connection pool to this shared database. The public
+`POST /v1/subscriptions` route replaces one instance's complete sheet set. The write-key-protected
+`POST /v1/subscriptions/unsubscribe` route removes one relationship. These routes only persist
+subscription and scheduling state; a later dispatcher must perform index refresh and deletion.
+
+Run schema/API validation and regression tests with `uv run python -m pytest tests/`. The
+PostgreSQL integration tests require a disposable local PostgreSQL cluster; set
+`SUBSCRIPTION_TEST_POSTGRES=1` and `SUBSCRIPTION_TEST_PORT` only when that test server is running.
+The fixture creates and drops a separate uniquely named test database for each test. Never point
+these tests at a production server or use production credentials. For example, a local disposable
+server can use test-only credentials and loopback access on port 55432.
 
 ## Usage
 
