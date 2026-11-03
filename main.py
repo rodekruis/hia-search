@@ -1,24 +1,27 @@
 from __future__ import annotations
+
+import os
+from collections.abc import Callable
+from contextlib import AbstractContextManager, asynccontextmanager
+
 import uvicorn
-from contextlib import asynccontextmanager
-from fastapi import (
-    FastAPI,
-)
-from fastapi.responses import RedirectResponse, JSONResponse
+from dotenv import load_dotenv
+from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routes import search, data, chat
-from agents.rag_agent import init_rag_agent, close_rag_agent
+from fastapi.responses import JSONResponse, RedirectResponse
+
+from agents.rag_agent import close_rag_agent, init_rag_agent
+from routes import chat, data, search, subscriptions
+from subscriptions.store import SubscriptionStore, open_subscription_store
 from utils.errors import register_exception_handlers
 from utils.middleware import RequestIdMiddleware
 from utils.telemetry import configure_telemetry, instrument_app
 from utils.tracing import init_tracing, shutdown_tracing
-import os
-from dotenv import load_dotenv
 
 load_dotenv()
 
 # load environment variables
-if "PORT" not in os.environ.keys():
+if "PORT" not in os.environ:
     port = 8000
 else:
     port = os.environ["PORT"]
@@ -58,57 +61,37 @@ async def lifespan(app: FastAPI):
     # then attaches to its own; the DB pool opens after psycopg is instrumented.
     configure_telemetry()
     init_tracing()
-    init_rag_agent()
-    yield
-    shutdown_tracing()
-    close_rag_agent()
+    try:
+        with app.state.subscription_store_factory() as store:
+            app.state.subscription_store = store
+            try:
+                init_rag_agent()
+                try:
+                    yield
+                finally:
+                    close_rag_agent()
+            finally:
+                del app.state.subscription_store
+    finally:
+        shutdown_tracing()
 
 
-# initialize FastAPI
-app = FastAPI(
-    title="hia-search",
-    description=description,
-    version="0.0.2",
-    license_info={
-        "name": "AGPL-3.0 license",
-        "url": "https://www.gnu.org/licenses/agpl-3.0.en.html",
-    },
-    openapi_tags=tags_metadata,
-    lifespan=lifespan,
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["POST"],
-    allow_headers=["*"],
-)
-app.add_middleware(RequestIdMiddleware)
-register_exception_handlers(app)
-# must happen before the first ASGI call (the lifespan), see utils.telemetry
-instrument_app(app)
+router = APIRouter()
 
 
-@app.get("/", include_in_schema=False)
+@router.get("/", include_in_schema=False)
 async def docs_redirect():
     """Redirect base URL to docs."""
     return RedirectResponse(url="/docs")
 
 
-@app.get("/health", include_in_schema=False)
+@router.get("/health", include_in_schema=False)
 async def health():
     """Liveness probe for container orchestration."""
     return {"status": "ok"}
 
 
-# Include routes
-app.include_router(search.router)
-app.include_router(data.router)
-app.include_router(chat.router)
-
-
-@app.get("/get-models", tags=["models"])
+@router.get("/get-models", tags=["models"])
 async def get_models():
     """Get information on the AI models used."""
     return JSONResponse(
@@ -119,6 +102,52 @@ async def get_models():
             "model chat": os.environ["MODEL_CHAT"],
         },
     )
+
+
+def create_app(
+    *,
+    subscription_store_factory: Callable[
+        [], AbstractContextManager[SubscriptionStore]
+    ] = open_subscription_store,
+) -> FastAPI:
+    app = FastAPI(
+        title="hia-search",
+        description=description,
+        version="0.0.2",
+        # Preserve the existing project's license and endpoint contracts.
+        license_info={
+            "name": "AGPL-3.0 license",
+            "url": "https://www.gnu.org/licenses/agpl-3.0.en.html",
+        },
+        openapi_tags=[
+            *tags_metadata,
+            {"name": "subscriptions", "description": "Persist sheet subscriptions."},
+        ],
+        lifespan=lifespan,
+    )
+    app.state.subscription_store_factory = subscription_store_factory
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["POST"],
+        allow_headers=["*"],
+    )
+    app.add_middleware(RequestIdMiddleware)
+    register_exception_handlers(app)
+    instrument_app(app)
+    for api_router in (
+        router,
+        search.router,
+        data.router,
+        chat.router,
+        subscriptions.router,
+    ):
+        app.include_router(api_router)
+    return app
+
+
+app = create_app()
 
 
 if __name__ == "__main__":

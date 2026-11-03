@@ -7,11 +7,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from openai import OpenAIError
 from psycopg import Error as PsycopgError
+from psycopg_pool import PoolTimeout
 
 logger = logging.getLogger(__name__)
 
 # Upstream failures we cannot recover from: surfaced as 502 without leaking details
-EXTERNAL_SERVICE_ERRORS = (OpenAIError, AzureError, PsycopgError)
+EXTERNAL_SERVICE_ERRORS = (OpenAIError, AzureError, PsycopgError, PoolTimeout)
 
 
 def request_id_of(request: Request) -> str | None:
