@@ -31,7 +31,8 @@ class VectorStorePayload(BaseModel):
     )
     data: dict = Field(
         default_factory=dict,
-        description=" JSON data from Google Sheet",
+        description="Optional JSON sheet data. Leave empty to fetch the public sheet.",
+        examples=[{}],
     )
     force: bool = Field(False, description="Reconcile even when the source hash is unchanged.")
 
