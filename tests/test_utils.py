@@ -126,6 +126,30 @@ class TestDetectLanguage:
         mock_post.return_value.json.return_value = []
         assert detect_language("Ciao mondo") == "en"
 
+    @pytest.mark.parametrize("operation", ["translate", "detect_language"])
+    @patch("utils.translator.requests.post")
+    def test_strict_indexing_propagates_upstream_failure(self, mock_post, operation):
+        import requests
+        import utils.translator as translator
+
+        mock_post.side_effect = requests.Timeout()
+        kwargs = {"from_lang": "nl", "to_lang": "en"} if operation == "translate" else {}
+        with pytest.raises(translator.TranslationError):
+            getattr(translator, operation)(text="Hello world", strict=True, **kwargs)
+
+    @pytest.mark.parametrize(("operation", "payload"), [
+        ("translate", [{"translations": [{"text": ""}]}]),
+        ("detect_language", [{"language": None}]),
+    ])
+    @patch("utils.translator.requests.post")
+    def test_strict_indexing_rejects_invalid_results(self, mock_post, operation, payload):
+        import utils.translator as translator
+
+        mock_post.return_value.json.return_value = payload
+        kwargs = {"from_lang": "nl", "to_lang": "en"} if operation == "translate" else {}
+        with pytest.raises(translator.TranslationError):
+            getattr(translator, operation)(text="Hello world", strict=True, **kwargs)
+
 
 # ---------------------------------------------------------------------------
 # constants.py – DocumentMetadata
@@ -156,11 +180,11 @@ class TestDocumentMetadata:
 
 class TestGoogleIdConversion:
 
-    def test_basic_conversion(self):
+    def test_exact_sheet_ids_have_distinct_names(self):
         from utils.vector_store import googleid_to_vectorstoreid
 
-        result = googleid_to_vectorstoreid("ABC-123")
-        assert result == "abc-123"
+        assert googleid_to_vectorstoreid("ABC-123") != googleid_to_vectorstoreid("abc-123")
+        assert googleid_to_vectorstoreid("My_Sheet") != googleid_to_vectorstoreid("MySheet")
 
     def test_strips_special_chars(self):
         from utils.vector_store import googleid_to_vectorstoreid
@@ -174,6 +198,14 @@ class TestGoogleIdConversion:
         long_id = "a" * 200
         result = googleid_to_vectorstoreid(long_id)
         assert len(result) <= 128
+
+    def test_environments_have_distinct_names(self, monkeypatch):
+        from utils.vector_store import googleid_to_vectorstoreid
+
+        monkeypatch.setenv("ENVIRONMENT", "prod")
+        production = googleid_to_vectorstoreid("sheet")
+        monkeypatch.setenv("ENVIRONMENT", "dev")
+        assert googleid_to_vectorstoreid("sheet") != production
 
 
 # ---------------------------------------------------------------------------

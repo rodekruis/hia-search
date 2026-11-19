@@ -1,0 +1,65 @@
+name: refresh indexes
+
+# Every 6 hours: refresh every managed production index whose Google Sheet changed. The API does
+# the work, so GitHub only holds the production API URL and write key.
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+    - cron: '47 3 * * *'
+  workflow_dispatch:
+    inputs:
+      run_cleanup:
+        description: Also run the inactive-index cleanup
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: refresh-indexes-production
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 */6 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    environment: production
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+
+    - name: Refresh indexes
+      env:
+        HIA_API_URL: ${{ vars.HIA_API_URL }}
+        API_KEY_WRITE: ${{ secrets.API_KEY_WRITE }}
+        HIA_ENVIRONMENT: production
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python scripts/refresh_indexes.py
+
+  cleanup:
+    if: github.event.schedule == '47 3 * * *' || (github.event_name == 'workflow_dispatch' && inputs.run_cleanup)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+
+    - name: Delete inactive indexes
+      env:
+        HIA_API_URL: ${{ vars.HIA_API_URL }}
+        API_KEY_WRITE: ${{ secrets.API_KEY_WRITE }}
+        HIA_ENVIRONMENT: production
+      run: python scripts/cleanup_indexes.py

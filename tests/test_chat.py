@@ -65,11 +65,10 @@ def _make_agent_response(text: str, doc_contents: list[str] | None = None, searc
 class TestChatDummy:
     """Tests for the POST /chat-dummy endpoint."""
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt")
     @patch("routes.chat.get_rag_agent")
     def test_basic_response(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client
+        self, mock_get_agent, mock_prompt_loader, client
     ):
         mock_prompt_loader.return_value = "You are helpful."
         mock_agent = MagicMock()
@@ -89,11 +88,10 @@ class TestChatDummy:
         assert "context" not in body
         assert body["traceId"] is None  # tracing disabled in tests
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_include_context_false(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client
+        self, mock_get_agent, mock_prompt_loader, client
     ):
         mock_agent = MagicMock()
         mock_agent.invoke.return_value = _make_agent_response(
@@ -112,11 +110,10 @@ class TestChatDummy:
         assert "response" in body
         assert "context" not in body
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_include_context_true(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client
+        self, mock_get_agent, mock_prompt_loader, client
     ):
         mock_agent = MagicMock()
         mock_agent.invoke.return_value = _make_agent_response(
@@ -135,11 +132,10 @@ class TestChatDummy:
         assert body["response"] == "answer"
         assert body["context"] == ["ctx1", "ctx2"]
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_include_context_no_tool_messages(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client
+        self, mock_get_agent, mock_prompt_loader, client
     ):
         """When include_context=True but the agent answered without retrieving,
         context should be an empty list."""
@@ -159,11 +155,10 @@ class TestChatDummy:
         body = resp.json()
         assert body["context"] == []
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_uses_default_google_sheet_id(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client
+        self, mock_get_agent, mock_prompt_loader, client
     ):
         """When no googleSheetId is provided, the default is used."""
         mock_agent = MagicMock()
@@ -177,11 +172,10 @@ class TestChatDummy:
             "14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04"
         )
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="You are helpful.")
     @patch("routes.chat.get_rag_agent")
     def test_prompt_and_sheet_id_travel_in_config_not_messages(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client, support_contacts
+        self, mock_get_agent, mock_prompt_loader, client, support_contacts
     ):
         support_contacts.return_value = {"emergency": "112"}
         mock_agent = MagicMock()
@@ -203,14 +197,12 @@ class TestChatDummy:
         support_contacts.assert_called_once_with("sheet123")
         assert [m.type for m in state_input[0]["messages"]] == ["human"]
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_message_and_answer_are_not_machine_translated(
         self,
         mock_get_agent,
         mock_prompt_loader,
-        mock_vs,
         client,
     ):
         """The model reads the message as written and answers in the user's language."""
@@ -250,11 +242,10 @@ class TestChatDummy:
         )
         assert resp.status_code == 401
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_custom_thread_id(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client
+        self, mock_get_agent, mock_prompt_loader, client
     ):
         """When threadId is explicitly provided, it should be forwarded to the agent."""
         mock_agent = MagicMock()
@@ -276,11 +267,10 @@ class TestChatDummy:
         assert config["configurable"]["thread_id"] == "my-thread-42"
         assert resp.json()["threadId"] == "my-thread-42"
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_generates_fresh_thread_id_when_omitted(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client
+        self, mock_get_agent, mock_prompt_loader, client
     ):
         """Without threadId each request gets its own random thread, never a shared one."""
         mock_agent = MagicMock()
@@ -310,11 +300,10 @@ class TestChatDummy:
         )
         assert resp.status_code == 422
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_logs_turn_metadata_but_never_content(
-        self, mock_get_agent, mock_prompt, mock_vs, client, app_logger
+        self, mock_get_agent, mock_prompt, client, app_logger
     ):
         """Conversation content belongs to the LLM observability tool, not App Insights."""
         user_text = "My asylum interview is tomorrow and I am scared"
@@ -353,11 +342,10 @@ class TestChatDummy:
 class TestChatTwilioWebhook:
     """Tests for the POST /chat-twilio-webhook endpoint."""
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_basic_twilio_response(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client
+        self, mock_get_agent, mock_prompt_loader, client
     ):
         mock_agent = MagicMock()
         mock_agent.invoke.return_value = _make_agent_response("Hello from bot!")
@@ -378,11 +366,10 @@ class TestChatTwilioWebhook:
         assert resp.text.count("<Message>") == 1
         assert "(1/" not in resp.text
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_twilio_logs_no_content_or_phone_number(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client, app_logger
+        self, mock_get_agent, mock_prompt_loader, client, app_logger
     ):
         mock_agent = MagicMock()
         mock_agent.invoke.return_value = _make_agent_response("Go to the town hall.")
@@ -405,11 +392,10 @@ class TestChatTwilioWebhook:
         assert reply["n_chunks"] == 1
         assert reply["threadId"] == hashlib.sha256(b"whatsapp:+31612345678").hexdigest()
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_long_answer_is_sent_as_numbered_messages(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client
+        self, mock_get_agent, mock_prompt_loader, client
     ):
         """Twilio rejects a single <Message> of 1600+ chars, so long answers are split."""
         import xml.etree.ElementTree as ET
@@ -446,11 +432,10 @@ class TestChatTwilioWebhook:
         )
         assert resp.status_code == 401
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_twilio_replies_with_fallback_when_chat_fails(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client
+        self, mock_get_agent, mock_prompt_loader, client
     ):
         """Twilio gets valid TwiML (200) so the user is told something went wrong."""
         mock_agent = MagicMock()
@@ -496,11 +481,10 @@ class TestChatTwilioWebhook:
         )
         assert resp.status_code == 401
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_twilio_per_instance_tokens(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client, monkeypatch
+        self, mock_get_agent, mock_prompt_loader, client, monkeypatch
     ):
         """Each googleSheetId is validated against its own Twilio account token."""
         mock_agent = MagicMock()
@@ -539,11 +523,10 @@ class TestChatTwilioWebhook:
         )
         assert resp.status_code == 401
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_twilio_signature_honours_forwarded_proto(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client
+        self, mock_get_agent, mock_prompt_loader, client
     ):
         """Twilio signs the public https URL even when the proxy forwards http."""
         mock_agent = MagicMock()
@@ -562,11 +545,10 @@ class TestChatTwilioWebhook:
         )
         assert resp.status_code == 200
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_twilio_signature_honours_forwarded_host(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client
+        self, mock_get_agent, mock_prompt_loader, client
     ):
         """Proxies that rewrite Host must not break validation of the public URL."""
         mock_agent = MagicMock()
@@ -605,11 +587,10 @@ class TestChatTwilioWebhook:
         assert record.has_signature is True
         assert TWILIO_TOKEN not in caplog.text
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_twilio_missing_body(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client
+        self, mock_get_agent, mock_prompt_loader, client
     ):
         """When Body is missing from the form data, return 400."""
         params = {"googleSheetId": "sheet123"}
@@ -635,11 +616,10 @@ class TestChatTwilioWebhook:
         assert resp.status_code == 400
         assert "sender" in resp.text
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_twilio_thread_is_hashed_sender(
-        self, mock_get_agent, mock_prompt_loader, mock_vs, client
+        self, mock_get_agent, mock_prompt_loader, client
     ):
         """Phone numbers never reach the checkpoint store in clear text."""
         mock_agent = MagicMock()
@@ -659,14 +639,12 @@ class TestChatTwilioWebhook:
         assert thread_id == hashlib.sha256(b"whatsapp:+31612345678").hexdigest()
         assert "31612345678" not in thread_id
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_twilio_reply_is_the_model_answer_as_is(
         self,
         mock_get_agent,
         mock_prompt_loader,
-        mock_vs,
         client,
     ):
         mock_agent = MagicMock()
@@ -708,11 +686,10 @@ class TestChatTracing:
         monkeypatch.setattr("routes.chat.langchain_callbacks", lambda project: callbacks)
         return span, lf_client, tracing.propagate_attributes, callbacks
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_retrieval_turn_span_has_evaluator_fields(
-        self, mock_get_agent, mock_prompt, mock_vs, client, chat_span
+        self, mock_get_agent, mock_prompt, client, chat_span
     ):
         span, lf_client, propagate, callbacks = chat_span
         prior_user, prior_bot = HumanMessage("earlier q"), AIMessage("earlier a")
@@ -767,11 +744,10 @@ class TestChatTracing:
         }
         span.score.assert_called_once_with(name="top_score", value=0.82, data_type="NUMERIC")
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_small_talk_span_has_no_retrieval_fields(
-        self, mock_get_agent, mock_prompt, mock_vs, client, chat_span
+        self, mock_get_agent, mock_prompt, client, chat_span
     ):
         span, *_ = chat_span
         mock_agent = MagicMock()
@@ -787,11 +763,10 @@ class TestChatTracing:
         assert "blocked_category" not in metadata
         span.score.assert_not_called()
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_blocked_turn_records_category_in_span_and_log(
-        self, mock_get_agent, mock_prompt, mock_vs, client, chat_span, app_logger
+        self, mock_get_agent, mock_prompt, client, chat_span, app_logger
     ):
         span, *_ = chat_span
         mock_agent = MagicMock()
@@ -809,11 +784,10 @@ class TestChatTracing:
         assert _record(app_logger, "chat turn").__dict__["blocked_category"] == "jailbreak"
         assert "ignore your rules" not in _logged_text(app_logger)
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
     def test_twilio_turns_are_tagged_by_channel(
-        self, mock_get_agent, mock_prompt, mock_vs, client, chat_span
+        self, mock_get_agent, mock_prompt, client, chat_span
     ):
         _, _, propagate, _ = chat_span
         mock_agent = MagicMock()
@@ -832,10 +806,9 @@ class TestChatTracing:
         thread = hashlib.sha256(b"+31612345678").hexdigest()
         assert propagate.call_args.kwargs["session_id"] == thread
 
-    @patch("routes.chat.get_vector_store")
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
-    def test_no_callbacks_when_untraced(self, mock_get_agent, mock_prompt, mock_vs, client):
+    def test_no_callbacks_when_untraced(self, mock_get_agent, mock_prompt, client):
         mock_agent = MagicMock()
         mock_agent.invoke.return_value = _make_agent_response("ok")
         mock_get_agent.return_value = mock_agent

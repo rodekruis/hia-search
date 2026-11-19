@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-import urllib.error
-from unittest.mock import patch
+import csv
+import io
+import json
+from unittest.mock import Mock, patch
 
 import pandas as pd
 import pytest
+import requests
 from fastapi import HTTPException
 
 from utils.document_loader import DocumentLoader, uuid_hash
@@ -46,6 +49,19 @@ def _offers_sheet(rows: list[dict]) -> pd.DataFrame:
         "#MOREINFO": nan,
     }
     return pd.DataFrame([{**defaults, **row} for row in rows])
+
+
+def _csv_response(rows: list[list]) -> Mock:
+    output = io.StringIO(newline="")
+    csv.writer(output).writerows(rows)
+    return Mock(
+        content=output.getvalue().encode("utf-8"),
+        headers={"Content-Type": "text/csv; charset=utf-8"},
+    )
+
+
+def _csv_rows(df: pd.DataFrame) -> list[list]:
+    return [list(df.columns), *df.astype(object).where(pd.notna(df), "").values.tolist()]
 
 
 def test_uuid_hash_is_deterministic():
@@ -217,6 +233,18 @@ class TestToDataframe:
         assert df["question"].tolist() == ["Q1"]
         assert df.iloc[0]["categoryID"] == 1
 
+    def test_cells_beyond_the_last_header_are_ignored(self):
+        """Real sheets have notes in unlabelled columns; they must not block indexing."""
+        headers = list(_offers_sheet([{}]).columns) + ["", "Notes"]
+        offer = ["2", "20", "", "Show", "Shelter"] + [""] * 9
+        values = {
+            "Q&As": [list(_qna_sheet([{}]).columns)],
+            "Offers": [headers, offer + ["", "", "stray note"], offer[:5]],
+        }
+        df = DocumentLoader("googlesheet", "sheet-1")._to_dataframe(values)
+        assert df["name"].tolist() == ["Shelter", "Shelter"]
+        assert "stray note" not in df.to_json()
+
     def test_json_without_data_raises_400(self):
         loader = DocumentLoader(document_type="json", document_data={})
         with pytest.raises(HTTPException) as exc:
@@ -229,30 +257,96 @@ class TestToDataframe:
             loader._to_dataframe()
         assert exc.value.status_code == 500
 
-    @patch("utils.document_loader.pd.read_csv")
-    def test_googlesheet_concatenates_qnas_and_offers(self, mock_read_csv):
-        mock_read_csv.side_effect = [
-            _qna_sheet([{"#QUESTION": "Q1"}]),
-            _offers_sheet([{"#NAME": "Offer1"}]),
+    @patch("utils.document_loader.requests.Session")
+    def test_public_csv_loads_both_tabs_without_a_key(self, mock_session, monkeypatch):
+        monkeypatch.delenv("GOOGLE_SHEETS_API_KEY", raising=False)
+        frames = [
+            _qna_sheet([{"#QUESTION": "A question", "#ANSWER": 'A "quoted", answer\nnext'}]),
+            _offers_sheet([{
+                "#NAME": "Offer1", "#PHONENUMBERS": "00123", "#NEEDTOKNOW": "NA",
+            }]),
         ]
+        session = mock_session.return_value.__enter__.return_value
+        session.get.side_effect = [_csv_response(_csv_rows(df)) for df in frames]
         loader = DocumentLoader(document_type="googlesheet", document_id="sheet-1")
-        df = loader._to_dataframe()
+        snapshot = loader.load_source()
 
-        urls = [call.args[0] for call in mock_read_csv.call_args_list]
-        assert "sheet=Q%26As" in urls[0] and "sheet-1" in urls[0]
-        assert "sheet=Offers" in urls[1]
-        assert df["source"].tolist() == ["QnAs", "Offers"]
+        calls = session.get.call_args_list
+        assert [call.kwargs["params"]["sheet"] for call in calls] == ["Q&As", "Offers"]
+        for call in calls:
+            assert call.args[0] == "https://docs.google.com/spreadsheets/d/sheet-1/gviz/tq"
+            assert call.kwargs["params"]["headers"] == 1
+            assert call.kwargs["params"]["tqx"] == "out:csv"
+            assert "headers" not in call.kwargs
+            assert "key" not in call.kwargs["params"]
+        assert [doc.metadata["source"] for doc in snapshot.documents] == ["QnAs", "Offers"]
+        assert snapshot.documents[0].page_content == 'A question A "quoted", answer next'
+        assert snapshot.documents[1].metadata["phonenumbers"] == "00123"
+        assert snapshot.documents[1].metadata["needtoknow"] == "NA"
+        json.dumps([doc.metadata for doc in snapshot.documents], allow_nan=False)
 
-    @patch("utils.document_loader.pd.read_csv")
-    def test_googlesheet_http_error_propagates_status(self, mock_read_csv):
-        mock_read_csv.side_effect = urllib.error.HTTPError(
-            url="u", code=404, msg="not found", hdrs=None, fp=None
-        )
+    @patch("utils.document_loader.requests.Session")
+    def test_csv_hash_normalizes_whitespace_and_trailing_empty_rows(self, mock_session):
+        qna = _csv_rows(_qna_sheet([{
+            "#CATEGORY": "1.0", "#SUBCATEGORY": "2.0",
+            "#QUESTION": "Question", "#ANSWER": "Answer",
+        }]))
+        offers = [list(_offers_sheet([{}]).columns)]
+        padded = [
+            [f" {value} " for value in qna[0]] + [""],
+            [f" {value} " for value in qna[1]] + [""],
+            ["", " "],
+        ]
+        session = mock_session.return_value.__enter__.return_value
+        session.get.side_effect = [
+            _csv_response(qna), _csv_response(offers),
+            _csv_response(padded), _csv_response(offers),
+        ]
+        loader = DocumentLoader("googlesheet", "sheet-1")
+        original, normalized = loader.load_source(), loader.load_source()
+        assert original.sheet_hash == normalized.sheet_hash
+        assert original.documents == normalized.documents
+        assert original.documents[0].metadata["categoryID"] == 1
+
+    @patch("utils.document_loader.requests.Session")
+    def test_googlesheet_http_error_is_explicit(self, mock_session):
+        session = mock_session.return_value.__enter__.return_value
+        session.get.side_effect = [
+            _csv_response(_csv_rows(_qna_sheet([{"#QUESTION": "Question"}]))),
+            requests.Timeout(),
+        ]
         loader = DocumentLoader(document_type="googlesheet", document_id="missing")
         with pytest.raises(HTTPException) as exc:
             loader._to_dataframe()
-        assert exc.value.status_code == 404
-        assert "missing" in exc.value.detail
+        assert exc.value.status_code == 502
+
+    @pytest.mark.parametrize(
+        ("content", "content_type"),
+        [
+            (b"<html>Sign in</html>", "text/html"),
+            (b'"unterminated', "text/csv; charset=utf-8"),
+            (b"\xff", "text/csv; charset=utf-8"),
+        ],
+    )
+    @patch("utils.document_loader.requests.Session")
+    def test_invalid_csv_response_is_not_an_empty_sheet(
+        self, mock_session, content, content_type
+    ):
+        session = mock_session.return_value.__enter__.return_value
+        session.get.return_value = Mock(
+            content=content, headers={"Content-Type": content_type}
+        )
+        with pytest.raises(HTTPException) as exc:
+            DocumentLoader("googlesheet", "sheet-1").load_source()
+        assert exc.value.status_code == 502
+
+    @patch("utils.document_loader.requests.Session")
+    def test_wrong_tab_headers_are_rejected(self, mock_session):
+        session = mock_session.return_value.__enter__.return_value
+        qna_rows = _csv_rows(_qna_sheet([{"#QUESTION": "Question"}]))
+        session.get.side_effect = [_csv_response(qna_rows), _csv_response(qna_rows)]
+        with pytest.raises(HTTPException, match="requires one #NAME"):
+            DocumentLoader("googlesheet", "sheet-1").load_source()
 
 
 class TestValidation:
@@ -283,8 +377,8 @@ class TestLoad:
     def test_load_translates_non_english_rows_and_keeps_metadata(
         self, mock_detect, mock_translate
     ):
-        mock_detect.side_effect = lambda text: "nl" if "Hallo" in text else "en"
-        mock_translate.side_effect = lambda from_lang, to_lang, text: f"[en]{text}"
+        mock_detect.side_effect = lambda text, **kwargs: "nl" if "Hallo" in text else "en"
+        mock_translate.side_effect = lambda from_lang, to_lang, text, **kwargs: f"[en]{text}"
         loader = DocumentLoader(
             document_type="json",
             document_data={
@@ -303,3 +397,80 @@ class TestLoad:
         assert docs[0].metadata["slug"] == "hallo"
         assert docs[1].metadata["parent"] == "hallo"
         mock_translate.assert_called_once()
+
+
+class TestCanonicalSource:
+    headers = [
+        "#CATEGORY", "#SUBCATEGORY", "#SLUG", "#VISIBLE", "#PARENT", "#QUESTION", "#ANSWER",
+    ]
+
+    def snapshot(self, rows):
+        return DocumentLoader("json", document_data={"values": rows}).load_source()
+
+    @patch("utils.document_loader.detect_language")
+    @patch("utils.document_loader.translate")
+    def test_ragged_whitespace_and_trailing_empty_rows_hash_identically(self, translate, detect):
+        original = self.snapshot([
+            self.headers, [1, 2, "", "Show", "", "Hello", "World"],
+        ])
+        padded = self.snapshot([
+            [f" {cell} " for cell in self.headers] + [""],
+            [" 1 ", " 2 ", "", " Show ", "", " Hello ", " World ", " "],
+            ["", " "], [],
+        ])
+
+        assert original.sheet_hash == padded.sheet_hash
+        assert original.documents == padded.documents
+        detect.assert_not_called()
+        translate.assert_not_called()
+
+    def test_value_and_visibility_changes_affect_hash(self):
+        row = [1, 2, "", "Show", "", "Hello", "World"]
+        initial = self.snapshot([self.headers, row])
+        changed = self.snapshot([self.headers, [*row[:-1], "Different"]])
+        hidden = self.snapshot([self.headers, [*row[:3], "hide", *row[4:]]])
+        assert len({initial.sheet_hash, changed.sheet_hash, hidden.sheet_hash}) == 3
+        assert hidden.documents == []
+
+    def test_header_only_is_valid_but_missing_header_is_not(self):
+        assert self.snapshot([self.headers]).documents == []
+        with pytest.raises(HTTPException, match="requires one #ANSWER"):
+            self.snapshot([self.headers[:-1]])
+
+    @pytest.mark.parametrize("category", ["invalid", 1.5, "18446744073709551615"])
+    def test_invalid_category_and_unindexable_entries_are_not_empty_successes(self, category):
+        with pytest.raises(HTTPException, match="category values"):
+            self.snapshot([self.headers, [category, 2, "", "Show", "", "Hello", "World"]])
+        with pytest.raises(HTTPException, match="unindexable"):
+            self.snapshot([self.headers, [1, 2, "", "Show", "", "12", "34"]])
+
+    @pytest.mark.parametrize("row", [
+        ["", 2, "", "Show", "", "Hello", "World"],
+        [1, "", "", "Show", "", "Hello", "World"],
+        [1, 2, "", "Show", "", "", "World"],
+        [1, 2, "", "Show", "", "Hello", ""],
+    ])
+    def test_incomplete_visible_qnas_are_not_empty_successes(self, row):
+        with pytest.raises(HTTPException, match="incomplete visible"):
+            self.snapshot([self.headers, row])
+
+    def test_hidden_and_placeholder_rows_can_form_an_empty_source(self):
+        snapshot = self.snapshot([
+            self.headers,
+            ["invalid", 2, "", "Hide", "", "Hello", ""],
+            [1, 2, "", "Show", "", "", ""],
+        ])
+        assert snapshot.documents == []
+
+    def test_incomplete_visible_offer_is_not_an_empty_success(self):
+        offers = _offers_sheet([{"#NAME": "", "#DESCRIPTION": "A real offer"}])
+        values = {"Q&As": [self.headers], "Offers": _csv_rows(offers)}
+        with pytest.raises(HTTPException, match="incomplete visible"):
+            DocumentLoader("googlesheet", "sheet-1")._to_dataframe(values)
+
+    def test_source_metadata_has_no_nan_and_preserves_text_identifiers(self):
+        snapshot = self.snapshot([
+            self.headers, [1, 2, None, "Show", None, "Call 00123", "Use 00456"],
+        ])
+        assert snapshot.documents[0].page_content == "Call 00123 Use 00456"
+        assert snapshot.documents[0].metadata["parent"] == ""

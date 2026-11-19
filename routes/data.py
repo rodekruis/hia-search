@@ -1,4 +1,6 @@
 from __future__ import annotations
+from datetime import datetime
+from typing import Literal
 from fastapi import (
     APIRouter,
     Depends,
@@ -10,9 +12,9 @@ from azure.search.documents.indexes import SearchIndexClient
 from azure.core.credentials import AzureKeyCredential
 from utils.auth import require_write_key
 from utils.vector_store import (
-    create_vector_store_index,
+    ensure_index_fresh,
     googleid_to_vectorstoreid,
-    invalidate_vector_store,
+    list_managed_indexes,
 )
 from utils.constants import DocumentMetadata
 import os
@@ -28,39 +30,64 @@ class VectorStorePayload(BaseModel):
         description="HIA Google sheet ID",
     )
     data: dict = Field(
-        {},
+        default_factory=dict,
         description=" JSON data from Google Sheet",
+    )
+    force: bool = Field(False, description="Reconcile even when the source hash is unchanged.")
+
+
+class IndexStatus(BaseModel):
+    index_name: str
+    source_sheet_id: str
+    source_type: Literal["googlesheet", "json"]
+    created_at: datetime | None = None
+    last_refreshed_at: datetime | None = None
+    last_searched_at: datetime | None = None
+    last_error: str | None = None
+    failing_since: datetime | None = Field(
+        None, description="Start of the current run of refresh failures, if any."
     )
 
 
-# Plain `def`, not `async def`: rebuilding an index loads the sheet, translates
-# and embeds every entry (minutes of blocking I/O). In the threadpool that keeps
+@router.get(
+    "/vector-stores", tags=["data"], dependencies=[Depends(require_write_key)],
+    response_model=list[IndexStatus], status_code=200,
+)
+def list_vector_stores() -> list[dict]:
+    """List this environment's managed indexes and their refresh metadata.
+
+    Protected with `API_KEY_WRITE`; used by the scheduled refresh workflow."""
+    return list_managed_indexes()
+
+
+# Plain `def`, not `async def`: refreshing an index performs blocking I/O.
+# In the threadpool that keeps
 # the event loop free for chat/Twilio requests and gunicorn's worker heartbeat.
 @router.post(
-    "/create-vector-store", tags=["data"], dependencies=[Depends(require_write_key)]
+    "/create-vector-store", tags=["data"], dependencies=[Depends(require_write_key)],
+    response_model=str, status_code=200,
 )
 def create_vector_store(payload: VectorStorePayload):
-    """Create a vector store from a HIA instance. Replace all entries if it already exists.
+    """Create or incrementally refresh a vector store from a HIA instance.
 
     Protected with `API_KEY_WRITE`."""
 
-    if payload.data:
-        document_type = "json"
-    else:
-        document_type = "googlesheet"
-
-    vector_store = create_vector_store_index(
-        document_type=document_type,
-        document_id=payload.googleSheetId,
-        document_data=payload.data,
+    index_name = googleid_to_vectorstoreid(payload.googleSheetId)
+    result = ensure_index_fresh(
+        index_name, force=payload.force,
+        source_sheet_id=payload.googleSheetId, document_data=payload.data or None,
     )
 
-    # count what was uploaded: the index's own document count lags a few
-    # seconds behind indexing and reads 0 right after the index is recreated
+    if result["status"] == "unchanged":
+        return JSONResponse(
+            status_code=200,
+            content=f"Vector store index {index_name} is unchanged "
+            f"with {result['document_count']} documents.",
+        )
     return JSONResponse(
         status_code=200,
-        content=f"Created vector store index {googleid_to_vectorstoreid(payload.googleSheetId)} "
-        f"with {vector_store.n_documents_added} documents.",
+        content=f"Created vector store index {index_name} "
+        f"with {result['document_count']} documents.",
     )
 
 
@@ -80,7 +107,6 @@ def delete_vector_store(payload: VectorStorePayload):
         _ = azure_search_index_client.delete_index(vector_store_id)
     except Exception as ex:
         raise HTTPException(status_code=400, detail=str(ex))
-    invalidate_vector_store(payload.googleSheetId)
 
     return JSONResponse(
         status_code=200, content=f"Deleted vector store index {vector_store_id}."
