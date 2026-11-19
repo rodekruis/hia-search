@@ -22,15 +22,22 @@ class TestDataEndpointsShape:
 class TestCreateVectorStore:
     """Tests for POST /create-vector-store."""
 
+    def test_openapi_example_shows_empty_data(self, client):
+        schema = client.get("/openapi.json").json()
+        data_schema = schema["components"]["schemas"]["VectorStorePayload"]["properties"]["data"]
+        assert data_schema["examples"] == [{}]
+
+    @pytest.mark.parametrize("data", [None, {}], ids=["omitted", "empty"])
     @patch("routes.data.ensure_index_fresh")
-    def test_create_from_google_sheet(self, mock_create, client):
+    def test_create_from_google_sheet(self, mock_create, client, data):
         mock_create.return_value = {"status": "updated", "document_count": 326}
 
+        payload: dict[str, object] = {"googleSheetId": "sheet123"}
+        if data is not None:
+            payload["data"] = data
         resp = client.post(
             "/create-vector-store",
-            json={
-                "googleSheetId": "sheet123",
-            },
+            json=payload,
             headers=WRITE,
         )
 
