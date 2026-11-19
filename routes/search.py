@@ -194,7 +194,7 @@ def search(payload: SearchPayload):
         raise HTTPException(status_code=400, detail="Invalid source; must be 'Q&As'")
 
     # load vector store
-    vector_store = get_vector_store(payload.googleSheetId, check_if_exists=True)
+    vector_store = get_vector_store(payload.googleSheetId)
 
     # translate if necessary
     original_query = payload.query

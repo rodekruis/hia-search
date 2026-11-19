@@ -9,7 +9,11 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 
-def translate(from_lang: str, to_lang: str, text: str) -> str:
+class TranslationError(RuntimeError):
+    pass
+
+
+def translate(from_lang: str, to_lang: str, text: str, *, strict: bool = False) -> str:
     """Translate text from one language to another."""
     if pd.isna(text) or text.strip() == "":
         return ""
@@ -29,13 +33,18 @@ def translate(from_lang: str, to_lang: str, text: str) -> str:
             timeout=10,
         )
         response.raise_for_status()
-        return response.json()[0]["translations"][0]["text"]
-    except (requests.RequestException, KeyError, IndexError) as e:
+        translated = response.json()[0]["translations"][0]["text"]
+        if strict and (not isinstance(translated, str) or not translated.strip()):
+            raise TranslationError("Translation API returned empty or invalid text.")
+        return translated
+    except (requests.RequestException, KeyError, IndexError, ValueError, TypeError) as e:
+        if strict:
+            raise TranslationError("Translation API failed.") from None
         logger.error(f"Translation API error: {e}")
         return text
 
 
-def detect_language(text: str) -> str:
+def detect_language(text: str, *, strict: bool = False) -> str:
     """Detect the language of the given text."""
     if pd.isna(text) or text.strip() == "":
         return "en"
@@ -55,7 +64,12 @@ def detect_language(text: str) -> str:
             timeout=10,
         )
         response.raise_for_status()
-        return response.json()[0]["language"]
-    except (requests.RequestException, KeyError, IndexError) as e:
+        language = response.json()[0]["language"]
+        if strict and (not isinstance(language, str) or not language.strip()):
+            raise TranslationError("Language detection API returned an invalid language.")
+        return language
+    except (requests.RequestException, KeyError, IndexError, ValueError, TypeError) as e:
+        if strict:
+            raise TranslationError("Language detection API failed.") from None
         logger.error(f"Language detection API error: {e}")
         return "en"

@@ -4,7 +4,6 @@ from fastapi import Response, APIRouter, Depends, Form, HTTPException, Query
 from twilio.twiml.messaging_response import MessagingResponse
 from langchain.messages import HumanMessage
 from pydantic import BaseModel, Field
-from utils.vector_store import get_vector_store
 from agents.rag_agent import format_context, get_rag_agent
 from utils.auth import require_read_key, require_twilio_signature
 from utils.messaging import number_chunks, split_message
@@ -45,10 +44,6 @@ def chat(
     matching the English index.
     """
     started = perf_counter()
-
-    # ensure the vector store exists (created from the sheet if not); cached after the
-    # first call, so this is the only existence check per turn
-    _ = get_vector_store(googleSheetId, check_if_exists=True)
 
     tags = [f"sheet:{googleSheetId}", f"channel:{channel}"]
 

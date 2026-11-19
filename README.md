@@ -149,7 +149,13 @@ The endpoint only accepts requests signed by Twilio, so the service needs the **
 
 Both the chat and search services need HIA content to be transformed into _embeddings_, i.e. numerical representations of text that capture semantic meaning in a high-dimensional vector space. Embeddings are stored in dedicated databases called _vector stores_. When searching or chatting with HIA, the user query is compared against these embeddings to find the most relevant Q&A pairs.
 
-Generating and storing the embeddings of your specific HIA instance is done automatically the first time you call the chat or search endpoints, if the HIA Google Sheet file is publicly accessible. If the Google Sheet file is not publicly accessible or you need to update it, you can use the  `/create-vector-store` endpoint, which you can call directly from [the swagger UI](https://hia-search.azurewebsites.net). You will need to authenticate with `API_KEY_WRITE`, which you find in Bitwarden. See API reference below.
+Generating and storing the embeddings of your specific HIA instance is done automatically the first time you call the chat or search endpoints, if the HIA Google Sheet file is publicly accessible. If the Google Sheet file is not publicly accessible or you need to update it, use the `/create-vector-store` endpoint, which you can call directly from [the swagger UI](https://hia-search.azurewebsites.net). You will need to authenticate with `API_KEY_WRITE`, which you find in Bitwarden. See API reference below.
+
+Refreshes are incremental: unchanged entries are not translated or embedded again, and new entries become searchable before the old ones are deleted. Indexes contain an internal metadata record with their source, environment, and successful-refresh hash. JSON-sourced indexes require a new JSON upload to refresh.
+
+Production sheet-backed indexes are also refreshed every 6 hours by the [refresh indexes](./.github/workflows/refresh-indexes.yml) workflow, which only calls the API: unchanged sheets cost one CSV download. Failures are shown in the workflow summary, and an index failing for more than a day gets a GitHub issue labelled `index-refresh` that closes automatically after recovery. Indexes with no searches in the last six calendar months are deleted by the daily cleanup; never-searched indexes use their creation date. Missing or invalid activity dates are kept. Sheet-backed indexes are recreated on the next search; JSON-sourced indexes need another upload. See the [index refresh plan](./docs/index-refresh-plan.md).
+
+Every successful search records index usage. Index names now depend on the exact sheet ID and environment and do not reuse old names. The service keeps no memory of indexes: a search that finds no index recreates it from the public sheet, so a deleted JSON-sourced index must be uploaded again.
 
 >[!NOTE]
 > Currently, each search or chat service is linked to only one Google Sheets file, a.k.a. _region_ in the HIA terminology. If it is not clear what this means, see [how HIA works](https://github.com/rodekruis/helpful-information?tab=readme-ov-file#how-it-works).
@@ -160,9 +166,13 @@ If not here, see the [`/docs`](https://hia-search.azurewebsites.net/docs).
 
 ### `/create-vector-store`
 
-The `/create-vector-store` endpoint accepts a `googleSheetId` body parameter, fetches all data from the Q&A sheet, and creates an [index](https://learn.microsoft.com/en-us/azure/search/search-what-is-an-index) in Azure AI Search, Azure's native vector database. If the index already exists, its content will be updated. The rebuild runs within the request and can take a few minutes for large sheets (every entry is translated and embedded); it does not hold up chat or search requests meanwhile. The response reports the number of documents indexed.
+The `/create-vector-store` endpoint accepts a `googleSheetId` body parameter, fetches public CSV exports of the `Q&As` and `Offers` tabs, and creates or incrementally updates an [index](https://learn.microsoft.com/en-us/azure/search/search-what-is-an-index) in Azure AI Search. The tabs are fetched separately, so edits between requests can temporarily produce a mixed snapshot. It trims surrounding whitespace and empty trailing rows before hashing the values. If the source and stored documents are unchanged, it skips translation and embedding. Add `"force": true` to bypass the hash check; entries already indexed still keep their embeddings.
+
+Refresh runs within the request and can take a few minutes for a large initial import; the event loop remains available to other requests. The response remains a JSON string reporting the total source document count, or that the index is unchanged. Searches may briefly see old and new entries together because indexing is eventually consistent.
 
 If the Q&A sheet is not publicly accessible, you can pass its content under the `data` body parameter. The content must be a valid JSON object structured as the [test-data from the `helpful-information`-app](https://github.com/rodekruis/helpful-information/blob/main/data/test-sheet-id-1/values/Q%26As.json).
+
+Every later refresh of a JSON-sourced index must supply `data` again; omitting it returns 409 instead of silently switching to the public sheet. A valid source with no indexable entries clears the content while retaining index metadata. Detected CSV errors, missing expected headers, incomplete visible entries, and read failures preserve existing content. Google's CSV endpoint can silently omit cells or return another tab for a missing tab; these failures cannot always be detected from the export alone. Model or vector-dimension changes require a new index and return 409.
 
 🔐 This endpoint is protected with the `API_KEY_WRITE` environment variable (sent in the `Authorization` header), whether the content comes from the Google Sheet or from `data`, to prevent unauthorized users from modifying the index.
 
@@ -225,6 +235,12 @@ Requests without a valid signature are rejected with 401.
 ### `/delete-vector-store`
 
 The `/delete-vector-store` endpoint accepts a `googleSheetId` body parameter and deletes the corresponding Azure AI Search index.
+
+🔐 This endpoint is protected with the `API_KEY_WRITE` environment variable.
+
+### `/vector-stores`
+
+`GET /vector-stores` lists the indexes this service manages in the current environment, with their source, `created_at`, `last_refreshed_at`, `last_searched_at`, `last_error` and `failing_since` (start of the current run of refresh failures). Used by the refresh workflow.
 
 🔐 This endpoint is protected with the `API_KEY_WRITE` environment variable.
 

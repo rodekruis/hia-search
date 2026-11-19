@@ -115,7 +115,7 @@ class TestSearch:
 
         assert resp.status_code == 200
         mock_get_vs.assert_called_once_with(
-            "14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04", check_if_exists=True
+            "14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04"
         )
 
     def test_search_missing_query_is_rejected(self, client):
@@ -252,7 +252,7 @@ class TestSearch:
 
         mock_translate.assert_not_called()
         vs.similarity_search_with_score.assert_called_once_with(query="hello", k=5)
-        mock_get_vs.assert_called_once_with("s", check_if_exists=True)
+        mock_get_vs.assert_called_once_with("s")
 
     @patch("routes.search.get_vector_store")
     def test_query_text_is_not_logged(self, mock_get_vs, client, caplog):
