@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
@@ -11,7 +13,7 @@ from azure.search.documents.indexes.models import SearchFieldDataType
 from fastapi import HTTPException
 
 import utils.vector_store as vs_module
-from utils.vector_store import VectorStore, get_vector_store
+from utils.vector_store import IndexNotReady, VectorStore, get_vector_store
 
 _SEARCH_RESULT = {
     "id": "doc-1",
@@ -19,6 +21,21 @@ _SEARCH_RESULT = {
     "metadata": '{"google_index": "QnAs1"}',
     "@search.score": 0.9,
 }
+
+
+@pytest.fixture(autouse=True)
+def _build_state(monkeypatch):
+    """Fresh per-process build state for every test."""
+    monkeypatch.setattr(vs_module, "_builds_running", set())
+    monkeypatch.setattr(vs_module, "_build_failures", {})
+    monkeypatch.setattr(vs_module, "_ready_indexes", set())
+
+
+def _wait_for_builds() -> None:
+    deadline = time.monotonic() + 5
+    while vs_module._builds_running:
+        assert time.monotonic() < deadline, "background build did not finish"
+        time.sleep(0.01)
 
 
 @pytest.fixture()
@@ -166,27 +183,86 @@ class TestSearch:
         store.client.merge_documents.assert_not_called()
 
     @patch("utils.vector_store.ensure_index_fresh")
-    def test_missing_index_is_created_from_sheet_then_searched(self, refresh, azure):
+    def test_missing_index_is_built_once_in_background_then_searched(self, refresh, azure):
         store = _store()
-        store.client.search.side_effect = [ResourceNotFoundError(), iter([dict(_SEARCH_RESULT)])]
+        store.client.get_document.side_effect = ResourceNotFoundError()
+        release = threading.Event()
+        refresh.side_effect = lambda *args, **kwargs: release.wait(5)
 
-        results = store.similarity_search_with_score("query", 2)
+        for _ in range(2):
+            with pytest.raises(IndexNotReady):
+                store.similarity_search_with_score("query", 2)
+        release.set()
+        _wait_for_builds()
 
+        assert len(store.similarity_search_with_score("query", 2)) == 1
         refresh.assert_called_once_with("idx", source_sheet_id="ABC")
-        assert len(results) == 1
+        # no embedding or search is wasted while the index is not ready
         store.embedder.embed_query.assert_called_once_with("query")
-        store.client.merge_documents.assert_called_once()
+        store.client.search.assert_called_once()
 
     @patch("utils.vector_store.ensure_index_fresh")
-    def test_unreadable_sheet_propagates_refresh_error(self, refresh, azure):
+    def test_half_built_index_is_completed_in_background(self, refresh, azure):
         store = _store()
-        store.client.search.side_effect = ResourceNotFoundError()
-        refresh.side_effect = HTTPException(status_code=502, detail="Could not read the Google Sheet.")
+        store.client.get_document.return_value = {"source_type": "googlesheet"}
 
+        with pytest.raises(IndexNotReady):
+            store.similarity_search_with_score("query", 2)
+        _wait_for_builds()
+
+        refresh.assert_called_once_with("idx", source_sheet_id="ABC")
+        store.client.search.assert_not_called()
+
+    @patch("utils.vector_store.ensure_index_fresh")
+    def test_complete_index_is_checked_once_per_process(self, refresh, azure):
+        store = _store()
+        store.client.get_document.return_value = {"sheet_hash": "h"}
+        store.client.search.side_effect = lambda **kwargs: iter([dict(_SEARCH_RESULT)])
+
+        store.similarity_search_with_score("query", 2)
+        store.similarity_search_with_score("query", 2)
+
+        store.client.get_document.assert_called_once()
+        refresh.assert_not_called()
+
+    @patch("utils.vector_store.ensure_index_fresh")
+    def test_failed_build_is_raised_once_then_retried(self, refresh, azure):
+        store = _store()
+        store.client.get_document.side_effect = ResourceNotFoundError()
+        refresh.side_effect = [HTTPException(status_code=502, detail="Could not read the Google Sheet."), None]
+
+        with pytest.raises(IndexNotReady):
+            store.similarity_search_with_score("query", 2)
+        _wait_for_builds()
         with pytest.raises(HTTPException) as exc:
             store.similarity_search_with_score("query", 2)
         assert exc.value.status_code == 502
+        with pytest.raises(IndexNotReady):
+            store.similarity_search_with_score("query", 2)
+        _wait_for_builds()
+
+        assert refresh.call_count == 2
         store.client.merge_documents.assert_not_called()
+
+    @patch("utils.vector_store.ensure_index_fresh")
+    def test_unfinished_json_index_is_not_built_from_a_sheet(self, refresh, azure):
+        store = _store()
+        store.client.get_document.return_value = {"source_type": "json"}
+        with pytest.raises(IndexNotReady):
+            store.similarity_search_with_score("query", 2)
+        refresh.assert_not_called()
+
+    @patch("utils.vector_store.ensure_index_fresh")
+    def test_index_deleted_after_check_is_rebuilt(self, refresh, azure):
+        store = _store()
+        store.client.get_document.return_value = {"sheet_hash": "h"}
+        store.client.search.side_effect = ResourceNotFoundError()
+
+        with pytest.raises(IndexNotReady):
+            store.similarity_search_with_score("query", 2)
+        _wait_for_builds()
+
+        refresh.assert_called_once_with("idx", source_sheet_id="ABC")
 
     @patch("utils.vector_store.ensure_index_fresh")
     def test_missing_index_without_source_is_not_recreated(self, refresh, azure):

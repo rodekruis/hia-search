@@ -4,7 +4,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from utils.vector_store import get_vector_store
+from utils.vector_store import IndexNotReady, get_vector_store
 from utils.constants import DocumentMetadata
 import json
 import logging
@@ -205,9 +205,13 @@ def search(payload: SearchPayload):
 
     tags = [f"sheet:{payload.googleSheetId}", "channel:search", f"lang:{payload.lang}"]
     with observe("search", project="search", input=payload.query, tags=tags) as span:
-        docs_and_scores = vector_store.similarity_search_with_score(
-            query=payload.query, k=payload.k
-        )
+        try:
+            docs_and_scores = vector_store.similarity_search_with_score(
+                query=payload.query, k=payload.k
+            )
+        except IndexNotReady:
+            logger.info("search: index not ready", extra={"googleSheetId": payload.googleSheetId})
+            return ORJSONResponse(status_code=202, content={"results": [], "partial": True})
         results = _build_results(docs_and_scores, vector_store)
         if span is not None:
             _record_search(span, payload, original_query, docs_and_scores, results)
@@ -244,5 +248,5 @@ def search(payload: SearchPayload):
 
     return ORJSONResponse(
         status_code=200,
-        content={"results": results},
+        content={"results": results, "partial": False},
     )

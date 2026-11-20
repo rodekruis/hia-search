@@ -14,6 +14,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 from twilio.request_validator import RequestValidator
 
 from main import app
+from routes.chat import INDEX_NOT_READY_MESSAGE
+from utils.vector_store import IndexNotReady
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -87,6 +89,26 @@ class TestChatDummy:
         assert body["response"] == "Hello there!"
         assert "context" not in body
         assert body["traceId"] is None  # tracing disabled in tests
+        assert body["partial"] is False
+
+    @patch("routes.chat.get_system_prompt", return_value="prompt")
+    @patch("routes.chat.get_rag_agent")
+    def test_index_not_ready_returns_202_with_chat_body(
+        self, mock_get_agent, mock_prompt_loader, client
+    ):
+        mock_get_agent.return_value.invoke.side_effect = IndexNotReady("idx")
+
+        resp = client.post(
+            "/chat-dummy",
+            params={"googleSheetId": "sheet123", "threadId": "t1", "include_context": True},
+            json={"message": "Hi"},
+        )
+
+        assert resp.status_code == 202
+        assert resp.json() == {
+            "response": INDEX_NOT_READY_MESSAGE, "traceId": None, "threadId": "t1",
+            "partial": True, "context": [],
+        }
 
     @patch("routes.chat.get_system_prompt", return_value="prompt")
     @patch("routes.chat.get_rag_agent")
@@ -455,6 +477,25 @@ class TestChatTwilioWebhook:
         assert resp.headers["content-type"] == "application/xml"
         assert "something went wrong" in resp.text
         assert "boom" not in resp.text
+
+    @patch("routes.chat.get_system_prompt", return_value="prompt")
+    @patch("routes.chat.get_rag_agent")
+    def test_twilio_tells_the_user_when_the_index_is_not_ready(
+        self, mock_get_agent, mock_prompt_loader, client
+    ):
+        mock_get_agent.return_value.invoke.side_effect = IndexNotReady("idx")
+
+        params = {"googleSheetId": "sheet123"}
+        form = {"Body": "Hi", "From": "+31612345678"}
+        resp = client.post(
+            "/chat-twilio-webhook",
+            params=params,
+            data=form,
+            headers=_twilio_headers("/chat-twilio-webhook", params, form),
+        )
+
+        assert resp.status_code == 202
+        assert "still being set up" in resp.text
 
     def test_twilio_invalid_signature(self, client):
         params = {"googleSheetId": "sheet123"}

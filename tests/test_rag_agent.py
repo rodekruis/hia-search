@@ -18,6 +18,8 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 
+from utils.vector_store import IndexNotReady
+
 _spec = importlib.util.spec_from_file_location(
     "rag_agent_real",
     Path(__file__).resolve().parent.parent / "agents" / "rag_agent.py",
@@ -134,6 +136,16 @@ def test_empty_search_is_explicit_in_the_generate_prompt(vector_store):
         f"You are HIA.\n\n{rag_agent.get_wellbeing_prompt({})}\n\n"
         f"Context documents:\n(none)\n\n{rag_agent.get_language_prompt()}"
     )
+
+
+def test_index_not_ready_propagates_out_of_the_graph(vector_store):
+    """ToolNode must not turn it into a tool message the model would answer from."""
+    vector_store.return_value.similarity_search_with_score.side_effect = IndexNotReady("idx")
+    llm = FakeLLM([_tool_call_msg("housing")])
+    graph = rag_agent.build_graph(MemorySaver())
+
+    with patch.object(rag_agent, "_get_llm", return_value=llm), pytest.raises(IndexNotReady):
+        graph.invoke({"messages": [("human", "where can I live?")]}, CONFIG)
 
 
 def test_responses_api_messages_flow_through_the_graph(vector_store):

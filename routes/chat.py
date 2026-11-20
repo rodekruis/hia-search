@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import Response, APIRouter, Depends, Form, HTTPException, Query
+from fastapi.responses import JSONResponse
 from twilio.twiml.messaging_response import MessagingResponse
 from langchain.messages import HumanMessage
 from pydantic import BaseModel, Field
@@ -9,6 +10,7 @@ from utils.auth import require_read_key, require_twilio_signature
 from utils.messaging import number_chunks, split_message
 from utils.prompt_loader import get_support_contacts, get_system_prompt
 from utils.tracing import get_langfuse, langchain_callbacks, observe
+from utils.vector_store import IndexNotReady
 import hashlib
 import logging
 import uuid
@@ -21,6 +23,10 @@ router = APIRouter()
 
 # Sent to the end user when generation fails; Twilio would otherwise deliver nothing.
 FALLBACK_MESSAGE = "Sorry, something went wrong on our side. Please try again in a few minutes."
+# Sent while the instance's index is built on its first search.
+INDEX_NOT_READY_MESSAGE = (
+    "Sorry, this service is still being set up. Please try again in a few minutes."
+)
 
 
 def _conversation_history(messages: list) -> str:
@@ -145,8 +151,13 @@ def chat_twilio_webhook(
     threadId = hashlib.sha256(sender.encode()).hexdigest()
     extra_logs = {"googleSheetId": googleSheetId, "threadId": threadId}
 
+    status_code = 200
     try:
         response_text = chat(threadId, googleSheetId, message, channel="twilio")["response"]
+    except IndexNotReady:
+        logger.info("Twilio chat turn: index not ready", extra=extra_logs)
+        response_text = INDEX_NOT_READY_MESSAGE
+        status_code = 202
     except Exception:
         # A 5xx would leave the user with no reply at all
         logger.exception("Twilio chat turn failed", extra=extra_logs)
@@ -159,7 +170,7 @@ def chat_twilio_webhook(
     resp = MessagingResponse()
     for chunk in chunks:
         resp.message(chunk)
-    return Response(content=str(resp), media_type="application/xml")
+    return Response(content=str(resp), media_type="application/xml", status_code=status_code)
 
 
 class MessagePayload(BaseModel):
@@ -187,15 +198,31 @@ def chat_dummy(
 ):
     """Dummy chat endpoint for testing. Protected with `API_KEY`.
 
-    Returns `traceId` (null when tracing is disabled) for use with `/feedback`."""
+    Returns `traceId` (null when tracing is disabled) for use with `/feedback`.
+    Returns 202 with a fixed `response` and `partial: true` while the instance's index
+    is being built (on its first search); retry later."""
 
     if threadId is None:
         threadId = str(uuid.uuid4())
 
-    result = chat(
-        threadId, googleSheetId, payload.message, include_context=include_context
-    )
+    try:
+        result = chat(
+            threadId, googleSheetId, payload.message, include_context=include_context
+        )
+    except IndexNotReady:
+        logger.info(
+            "chat turn: index not ready",
+            extra={"googleSheetId": googleSheetId, "threadId": threadId},
+        )
+        result = {
+            "response": INDEX_NOT_READY_MESSAGE, "traceId": None,
+            "threadId": threadId, "partial": True,
+        }
+        if include_context:
+            result["context"] = []
+        return JSONResponse(status_code=202, content=result)
     result["threadId"] = threadId
+    result["partial"] = False
 
     return result
 

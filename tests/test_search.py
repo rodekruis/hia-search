@@ -56,6 +56,7 @@ class TestSearch:
         assert "results" in body
         assert len(body["results"]) == 1
         assert body["results"][0]["question"] == "How to apply?"
+        assert body["partial"] is False
 
     @patch("routes.search.get_vector_store")
     def test_invalid_source(self, mock_get_vs, client):
@@ -121,6 +122,17 @@ class TestSearch:
     def test_search_missing_query_is_rejected(self, client):
         resp = client.post("/search", json={"googleSheetId": "s"})
         assert resp.status_code == 422
+
+    @patch("routes.search.get_vector_store")
+    def test_index_not_ready_returns_202_with_empty_results(self, mock_get_vs, client):
+        from utils.vector_store import IndexNotReady
+
+        mock_get_vs.return_value.similarity_search_with_score.side_effect = IndexNotReady("idx")
+
+        resp = client.post("/search", json={"query": "visa", "googleSheetId": "new-sheet"})
+
+        assert resp.status_code == 202
+        assert resp.json() == {"results": [], "partial": True}
 
     @patch("routes.search.get_vector_store")
     def test_search_deduplicates_by_google_index(self, mock_get_vs, client):
