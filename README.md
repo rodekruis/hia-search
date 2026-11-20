@@ -206,9 +206,12 @@ and returns a list of relevant questions and answers, in this format:
                 }
             ]
         }
-    ]
+    ],
+    "partial": false
 }
  ```
+
+ Every search response includes `"partial": false`. The first search of an instance whose index does not exist (or was left half-built) starts building it in the background and immediately returns **202** with `{"results": [], "partial": true}`. Searches keep returning 202 until the build finishes, so clients should treat 202 / `partial: true` as "not ready yet, retry later" rather than "no results". If the build fails, the next search returns its error once, and the search after that tries again.
 
  This endpoint is protected with the `API_KEY` environment variable. As this key will be stored by the client-application in plain-text, visible in the browser, it should be considered public. Its main purpose is to prevent abuse of the API by unauthorized users (with possible future measures against it).
 
@@ -220,11 +223,11 @@ The `/chat-dummy` endpoint is a test/development chat endpoint that accepts:
 * `threadId` (query, optional): a conversation thread ID (max 200 chars); if omitted, a new random one is generated. The response includes the `threadId` used, so pass it back to continue the same conversation
 * `include_context` (query, optional): when `true`, the response includes the retrieved context documents
 
-It returns the chatbot's response as JSON. Protected with `API_KEY`.
+It returns the chatbot's response as JSON, with `"partial": false`. Protected with `API_KEY`. While the instance's index is being built (see [`/search`](#search-1)), it returns **202** with the same body, `"partial": true` and a fixed "still being set up" `response`.
 
 ### `/chat-twilio-webhook`
 
-The `/chat-twilio-webhook` endpoint receives incoming messages from Twilio and responds via SMS/WhatsApp. See [Set up the chat service](#3-set-up-the-chat-service) for configuration.
+The `/chat-twilio-webhook` endpoint receives incoming messages from Twilio and responds via SMS/WhatsApp. See [Set up the chat service](#3-set-up-the-chat-service) for configuration. While the instance's index is being built, it returns **202** with a TwiML reply telling the user the service is still being set up.
 
 🔐 This endpoint only accepts requests signed by Twilio: the `X-Twilio-Signature` header is validated against the Auth Token of the Twilio account bound to the `googleSheetId` in the URL (see [Set up the chat service](#3-set-up-the-chat-service) for where to find it). Configure either:
 * `TWILIO_AUTH_TOKENS`: a JSON object mapping each `googleSheetId` to its Twilio Auth Token, e.g. `{"14NZwDa8DNmH1q2Rxt-ojP9MZhJ-2GlOIyN8RF19iF04": "abc123"}`. Instances without an entry are rejected.

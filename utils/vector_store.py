@@ -2,6 +2,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import threading
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -51,6 +52,19 @@ _ERROR_SEPARATOR = " | "
 
 
 dm = DocumentMetadata()
+
+
+class IndexNotReady(Exception):
+    """The index is missing or still being built; a background build is running."""
+
+
+# Per-process state of first builds. Indexes become complete once (sheet_hash written)
+# and stay so, so a completed check is cached; a deleted index is detected on search.
+_builds_lock = threading.Lock()
+_builds_running: set[str] = set()
+_build_failures: dict[str, Exception] = {}
+_ready_indexes: set[str] = set()
+
 
 class RefreshResult(TypedDict):
     status: Literal["unchanged", "updated"]
@@ -243,21 +257,88 @@ class VectorStore:
                 extra={"index_name": self.store_id, "error_type": type(error).__name__},
             )
 
+    def _ensure_ready(self) -> None:
+        """Raise IndexNotReady (starting a build) unless the index was fully built.
+
+        Only `ensure_index_fresh` writes `sheet_hash`, as its last step, so an index
+        without it is missing, half-built by a crashed build, or still being built.
+        """
+        if not self.source_sheet_id or self.store_id in _ready_indexes:
+            return
+        try:
+            metadata = self.client.get_document(
+                INDEX_METADATA_ID, selected_fields=["sheet_hash", "source_type"],
+            )
+        except ResourceNotFoundError:
+            metadata = None
+        if metadata and metadata.get("sheet_hash"):
+            with _builds_lock:
+                _ready_indexes.add(self.store_id)
+            return
+        if metadata and metadata.get("source_type") == "json":
+            # JSON indexes are built by their upload request, never from a sheet.
+            raise IndexNotReady(self.store_id)
+        _start_build(self.store_id, self.source_sheet_id)
+        raise IndexNotReady(self.store_id)
+
     def similarity_search_with_score(
         self, query: str, k: int
     ) -> list[tuple[Document, float]]:
-        """Hybrid search; a missing index is first created from its Google Sheet."""
+        """Hybrid search.
+
+        Raises IndexNotReady while the index is missing or incomplete; it is then
+        built from its Google Sheet in the background.
+        """
+        self._ensure_ready()
         embedding = self.embedder.embed_query(query)
         try:
             results = self._hybrid_search(query, embedding, k)
         except ResourceNotFoundError:
             if not self.source_sheet_id:
                 raise
-            logger.info("Index missing; creating it", extra={"index_name": self.store_id})
-            ensure_index_fresh(self.store_id, source_sheet_id=self.source_sheet_id)
-            results = self._hybrid_search(query, embedding, k)
+            # deleted since it was found complete, e.g. by cleanup
+            with _builds_lock:
+                _ready_indexes.discard(self.store_id)
+            _start_build(self.store_id, self.source_sheet_id)
+            raise IndexNotReady(self.store_id) from None
         self._record_search()
         return results
+
+
+def _start_build(index_name: str, source_sheet_id: str) -> None:
+    """Build an index in a background thread, at most one build per index at a time.
+
+    A failed build is raised once to the next search instead of silently starting
+    another, so a broken sheet surfaces its error; the search after that retries.
+    """
+    with _builds_lock:
+        failure = _build_failures.pop(index_name, None)
+        if failure is None:
+            if index_name in _builds_running:
+                return
+            _builds_running.add(index_name)
+    if failure is not None:
+        raise failure
+    logger.info("Index not ready; building it in the background", extra={"index_name": index_name})
+    threading.Thread(
+        target=_run_build, args=(index_name, source_sheet_id),
+        name=f"index-build-{index_name}", daemon=True,
+    ).start()
+
+
+def _run_build(index_name: str, source_sheet_id: str) -> None:
+    try:
+        ensure_index_fresh(index_name, source_sheet_id=source_sheet_id)
+    except Exception as error:  # thread boundary: every failure must be recorded
+        logger.exception("Background index build failed", extra={"index_name": index_name})
+        with _builds_lock:
+            _build_failures[index_name] = error
+    else:
+        with _builds_lock:
+            _ready_indexes.add(index_name)
+    finally:
+        with _builds_lock:
+            _builds_running.discard(index_name)
 
 
 def _read_documents(client: SearchClient, select: list[str] | None = None) -> list[dict]:
@@ -551,7 +632,8 @@ def ensure_index_fresh(
 def get_vector_store(google_sheet_id: str) -> VectorStore:
     """Build a search client for a HIA instance.
 
-    A missing index is created from the Google Sheet on its first search.
+    A missing or incomplete index is built from the Google Sheet in the background
+    on its first search, which raises IndexNotReady meanwhile.
     """
     return VectorStore(
         store_path=os.environ["VECTOR_STORE_ADDRESS"],
